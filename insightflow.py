@@ -232,7 +232,6 @@ def call_deepseek(prompt):
             return None
     except:
         return None
-
 def ai_analyze(query, df):
     """AI 模式：智能分析 + 智能图表"""
     # 准备数据摘要
@@ -250,30 +249,45 @@ def ai_analyze(query, df):
     stats += f"数值列：{', '.join(real_numeric_cols[:5])}。"
     stats += f"文本列：{', '.join(text_cols[:5])}。"
     
-    # 关键统计（只发送统计结果）
+    # 关键统计（只发送统计结果，并转换为普通数字）
     summary = {}
     for col in real_numeric_cols[:3]:
         summary[col] = {
-            "平均值": round(df[col].mean(), 2),
-            "最大值": df[col].max(),
-            "最小值": df[col].min()
+            "平均值": float(round(df[col].mean(), 2)),
+            "最大值": float(df[col].max()),
+            "最小值": float(df[col].min())
         }
     
     for col in text_cols[:3]:
         top_values = df[col].value_counts().head(5).to_dict()
+        # 确保所有值都是字符串格式
+        top_values = {str(k): int(v) for k, v in top_values.items()}
         summary[col] = {"前5个值": top_values}
     
-    # 准备示例数据（前10行，用于展示）
-    sample_data = df.head(10).to_dict('records')
+    # 准备示例数据（前10行，转换为字符串格式）
+    sample_data = []
+    for i, row in df.head(10).iterrows():
+        row_dict = {}
+        for col in df.columns:
+            val = row[col]
+            if pd.isna(val):
+                row_dict[col] = None
+            elif isinstance(val, (np.integer, np.floating)):
+                row_dict[col] = float(val)
+            elif isinstance(val, pd.Timestamp):
+                row_dict[col] = val.strftime('%Y-%m-%d')
+            else:
+                row_dict[col] = str(val)
+        sample_data.append(row_dict)
     
-    # 构建 AI 提示词（要求返回 JSON 格式）
+    # 构建 AI 提示词
     prompt = f"""
 用户问题：{query}
 
 数据概况：
 - {stats}
 - 关键统计：{json.dumps(summary, ensure_ascii=False)}
-- 示例数据（前10行）：{json.dumps(sample_data, ensure_ascii=False, default=str)}
+- 示例数据（前10行）：{json.dumps(sample_data, ensure_ascii=False)}
 
 请分析用户问题，并返回 JSON 格式的结果。JSON 必须包含以下字段：
 - chart_type: 图表类型，可选值：'pie'(饼图，用于分布)、'bar'(柱状图，用于排名/对比)、'line'(折线图，用于趋势)、'none'(不需要图表)
@@ -291,19 +305,18 @@ def ai_analyze(query, df):
     
     if response:
         try:
-            # 尝试解析 JSON
             result = json.loads(response)
             return result
         except:
-            # 如果 JSON 解析失败，返回默认结构
             return {
                 "chart_type": "none",
                 "insight": "AI 分析完成",
                 "recommendation": "请查看数据详情",
-                "fun_fact": "数据共" + str(len(df)) + "条记录",
+                "fun_fact": f"数据共{len(df)}条记录",
                 "summary": "分析完成"
             }
     return None
+
 
 # ==================== 降级模式：规则匹配 ====================
 def fallback_analyze(query, df):
