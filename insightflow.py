@@ -59,6 +59,16 @@ if 'current_chart_x' not in st.session_state:
     st.session_state.current_chart_x = None
 if 'current_chart_y' not in st.session_state:
     st.session_state.current_chart_y = None
+if 'current_insight' not in st.session_state:
+    st.session_state.current_insight = None
+if 'current_recommendation' not in st.session_state:
+    st.session_state.current_recommendation = None
+if 'current_fun_fact' not in st.session_state:
+    st.session_state.current_fun_fact = None
+if 'current_summary' not in st.session_state:
+    st.session_state.current_summary = None
+if 'has_result' not in st.session_state:
+    st.session_state.has_result = False
 
 # ==================== DeepSeek API 配置 ====================
 DEEPSEEK_API_KEY = "sk-52bcbd3d232945828250c3a1408598ff"
@@ -130,9 +140,16 @@ def ai_analyze(query, df):
     if not real_numeric_cols:
         real_numeric_cols = numeric_cols
     
+    # 获取所有可能的部门名称
+    dept_names = []
+    if '部门' in df.columns:
+        dept_names = df['部门'].unique().tolist()
+    
     stats = f"数据共有{len(df)}行，{len(df.columns)}列。"
     stats += f"数值列：{', '.join(real_numeric_cols[:5])}。"
     stats += f"文本列：{', '.join(text_cols[:5])}。"
+    if dept_names:
+        stats += f"部门列表：{', '.join(dept_names[:10])}。"
     
     # 统计摘要
     summary = {}
@@ -172,11 +189,13 @@ def ai_analyze(query, df):
 - 示例数据（前10行）：{json.dumps(sample_data, ensure_ascii=False)}
 
 【重要规则】
-1. 如果用户问「分布」「占比」，用 pie 图，chart_x 应该是分类字段，chart_y 用 "数量"
-2. 如果用户问「前几名」「排名」「最高」，用 bar 图
-3. 如果用户问「趋势」「变化」，用 line 图
-4. 如果用户问的是具体部门（如技术部、销售部），需要筛选该部门的数据，filter 字段填写部门名称
-5. 如果用户问「平均年龄」「平均薪资」且指定了部门，需要筛选该部门
+1. 如果用户问的是具体部门（如技术部、销售部、人力资源部、产品部、市场部、财务部、运营部），必须在 filter 字段填写部门名称
+2. 例如用户问「人力资源部人员」，filter 应该是 "部门=人力资源部"
+3. 例如用户问「技术部平均年龄」，filter 应该是 "部门=技术部"
+4. 如果用户没有指定部门，filter 填 null
+5. 如果用户问「分布」「占比」，用 pie 图
+6. 如果用户问「前几名」「排名」「最高」，用 bar 图
+7. 如果用户问「趋势」「变化」，用 line 图
 
 请分析用户问题，并返回一个**纯 JSON 对象**。
 
@@ -351,7 +370,7 @@ def display_paginated_table(df, title="数据列表", rows_per_page=10, key_pref
     page_df = df.iloc[start_idx:end_idx]
     st.dataframe(page_df, use_container_width=True)
     
-    # 分页按钮 - 浅蓝色样式
+    # 分页按钮
     if total_pages > 1:
         col1, col2, col3, col4, col5 = st.columns([1, 1, 2, 1, 1])
         with col1:
@@ -414,12 +433,6 @@ st.markdown(f"""
         box-shadow: 0 4px 12px rgba(30,136,229,0.3);
     }}
     
-    /* 分页按钮样式 - 浅蓝色 */
-    .stButton > button:has(> :contains("首页")) {{
-        background: {LIGHT_BLUE} !important;
-        color: {PRIMARY_BLUE} !important;
-    }}
-    
     .stTextInput > div > div > input {{
         border-radius: 40px;
         border: 2px solid #E5E7EB;
@@ -437,6 +450,7 @@ st.markdown(f"""
         padding: 20px;
         border-left: 4px solid {PRIMARY_BLUE};
         margin-top: 20px;
+        margin-bottom: 20px;
     }}
     
     .stat-item {{
@@ -531,8 +545,9 @@ if uploaded_file:
         st.markdown(f"📄 **{uploaded_file.name}** ({(uploaded_file.size / 1024):.1f} KB)")
     with col2:
         if st.button("🗑️ 删除", key="delete_btn"):
+            # 清空所有保存的结果
             st.session_state.filtered_df = None
-            st.session_state.filter_name = None
+            st.session_state.has_result = False
             st.rerun()
     
     # 加载数据
@@ -569,7 +584,7 @@ if uploaded_file:
     examples = generate_dynamic_examples(df)
     st.caption(f"💡 试试这些：{examples}")
     
-    # 分析逻辑
+    # ==================== 分析逻辑 ====================
     if analyze_btn and query:
         api_ok = check_api_availability()
         
@@ -601,10 +616,6 @@ if uploaded_file:
                             display_df = df[df[filter_field] == filter_value]
                             filter_name = filter_value
                     
-                    # 保存到 session_state
-                    st.session_state.filtered_df = display_df
-                    st.session_state.filter_name = filter_name
-                    
                     # 准备图表数据
                     result_df = None
                     if chart_type != "none" and chart_x and chart_y and chart_x in display_df.columns and chart_y in display_df.columns:
@@ -614,11 +625,23 @@ if uploaded_file:
                             result_df = display_df.groupby(chart_x)[chart_y].sum().reset_index()
                             result_df = result_df.sort_values(chart_y, ascending=False).head(10)
                     
-                    # 保存图表数据
+                    # 保存所有结果到 session_state
+                    st.session_state.filtered_df = display_df
+                    st.session_state.filter_name = filter_name
                     st.session_state.current_result_df = result_df
                     st.session_state.current_chart_type = chart_type
                     st.session_state.current_chart_x = chart_x
                     st.session_state.current_chart_y = chart_y
+                    st.session_state.current_insight = insight
+                    st.session_state.current_recommendation = recommendation
+                    st.session_state.current_fun_fact = fun_fact
+                    st.session_state.current_summary = summary
+                    st.session_state.has_result = True
+                    
+                    # 重置分页页码
+                    page_key = "page_table"
+                    if page_key in st.session_state:
+                        st.session_state[page_key] = 1
                     
                     # 显示结果
                     st.markdown("---")
@@ -627,36 +650,7 @@ if uploaded_file:
                     if summary:
                         st.markdown(f"**{summary}**")
                     
-                    # 左右布局
-                    col_left, col_right = st.columns([3, 2])
-                    
-                    with col_left:
-                        if filter_name:
-                            title = f"{filter_name}员工名单"
-                        else:
-                            title = "数据列表"
-                        display_paginated_table(display_df, title, rows_per_page=10, key_prefix="main")
-                    
-                    with col_right:
-                        if result_df is not None:
-                            fig = create_chart(result_df, chart_type, chart_x, chart_y)
-                            if fig:
-                                st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
-                        elif chart_type == "pie" and text_cols:
-                            # 显示默认分布图
-                            priority_cols = ['部门', '岗位', '地区', '状态']
-                            chart_col = text_cols[0]
-                            for pc in priority_cols:
-                                if pc in text_cols:
-                                    chart_col = pc
-                                    break
-                            default_data = display_df[chart_col].value_counts().head(5)
-                            fig = px.pie(values=default_data.values, names=default_data.index, title=f"{chart_col}分布")
-                            fig.update_traces(marker=dict(colors=px.colors.sequential.Blues_r), hole=0.3)
-                            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
-                            st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
-                    
-                    # AI 洞察区域
+                    # AI 洞察区域（放在表格前面）
                     st.markdown('<div class="ai-card">', unsafe_allow_html=True)
                     st.markdown("### 🧠 Tuotuo's AI 智能洞察")
                     
@@ -668,6 +662,34 @@ if uploaded_file:
                         st.markdown(f"📌 **有趣的数据**：{fun_fact}")
                     
                     st.markdown('</div>', unsafe_allow_html=True)
+                    
+                    # 表格 + 图表（左右布局）
+                    col_left, col_right = st.columns([3, 2])
+                    
+                    with col_left:
+                        if filter_name:
+                            title = f"{filter_name}员工名单"
+                        else:
+                            title = "数据列表"
+                        display_paginated_table(display_df, title, rows_per_page=10, key_prefix="table")
+                    
+                    with col_right:
+                        if result_df is not None:
+                            fig = create_chart(result_df, chart_type, chart_x, chart_y)
+                            if fig:
+                                st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+                        elif text_cols and chart_type != "none":
+                            priority_cols = ['部门', '岗位', '地区', '状态']
+                            chart_col = text_cols[0]
+                            for pc in priority_cols:
+                                if pc in text_cols:
+                                    chart_col = pc
+                                    break
+                            default_data = display_df[chart_col].value_counts().head(5)
+                            fig = px.pie(values=default_data.values, names=default_data.index, title=f"{chart_col}分布")
+                            fig.update_traces(marker=dict(colors=px.colors.sequential.Blues_r), hole=0.3)
+                            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+                            st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
                 else:
                     st.warning("🤖 AI 服务繁忙，请稍后再试")
         
@@ -677,11 +699,28 @@ if uploaded_file:
     elif analyze_btn and not query:
         st.warning("💡 请输入一个问题～")
     
-    # 如果有保存的图表数据，显示它们（用于翻页后保持）
-    elif st.session_state.current_result_df is not None and not analyze_btn:
+    # ==================== 显示上次结果（用于翻页后保持）====================
+    elif st.session_state.has_result and not analyze_btn:
         st.markdown("---")
         st.markdown("### 📊 分析结果")
         
+        if st.session_state.current_summary:
+            st.markdown(f"**{st.session_state.current_summary}**")
+        
+        # AI 洞察区域（放在表格前面）
+        st.markdown('<div class="ai-card">', unsafe_allow_html=True)
+        st.markdown("### 🧠 Tuotuo's AI 智能洞察")
+        
+        if st.session_state.current_insight:
+            st.markdown(f"🔍 **洞察**：{st.session_state.current_insight}")
+        if st.session_state.current_recommendation:
+            st.markdown(f"🎯 **决策建议**：{st.session_state.current_recommendation}")
+        if st.session_state.current_fun_fact:
+            st.markdown(f"📌 **有趣的数据**：{st.session_state.current_fun_fact}")
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+        
+        # 表格 + 图表（左右布局）
         col_left, col_right = st.columns([3, 2])
         
         with col_left:
@@ -690,7 +729,7 @@ if uploaded_file:
             else:
                 title = "数据列表"
             if st.session_state.filtered_df is not None:
-                display_paginated_table(st.session_state.filtered_df, title, rows_per_page=10, key_prefix="main")
+                display_paginated_table(st.session_state.filtered_df, title, rows_per_page=10, key_prefix="table")
         
         with col_right:
             if st.session_state.current_result_df is not None:
@@ -702,6 +741,12 @@ if uploaded_file:
                 )
                 if fig:
                     st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+            elif '部门' in df.columns:
+                default_data = df['部门'].value_counts().head(5)
+                fig = px.pie(values=default_data.values, names=default_data.index, title="部门分布")
+                fig.update_traces(marker=dict(colors=px.colors.sequential.Blues_r), hole=0.3)
+                fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+                st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
 
 else:
     # 引导页面
