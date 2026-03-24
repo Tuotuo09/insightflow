@@ -164,7 +164,7 @@ if 'api_checked' not in st.session_state:
 # ==================== DeepSeek API 配置 ====================
 # 比赛演示时，在这里填入你的 API Key
 # 或者部署到 Streamlit Cloud 后，在 Secrets 中配置
-DEEPSEEK_API_KEY = st.secrets.get("sk-52bcbd3d232945828250c3a1408598ff", "")
+DEEPSEEK_API_KEY = "sk-52bcbd3d232945828250c3a1408598ff"
 
 def check_api_availability():
     """检查 API 是否可用（只检查一次）"""
