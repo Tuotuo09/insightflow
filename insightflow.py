@@ -335,7 +335,7 @@ def generate_dynamic_examples(df):
     real_numeric_cols = [c for c in numeric_cols if not any(kw in c.lower() for kw in id_keywords)]
     
     # 优先选择有意义的分类字段
-    priority_cols = ['部门', '岗位', '产品', '地区', '城市', '状态', '等级', '类型', '渠道']
+    priority_cols = ['部门', '岗位', '产品', '地区', '城市', '状态', '等级', '类型', '渠道', '姓名']
     selected_text = None
     for pc in priority_cols:
         if pc in text_cols:
@@ -349,7 +349,7 @@ def generate_dynamic_examples(df):
         # 获取该字段的前2个常见值作为筛选示例
         top_values = df[selected_text].value_counts().head(2).index.tolist()
         for val in top_values:
-            if val and str(val).strip():
+            if val and str(val).strip() and str(val) != 'nan':
                 examples.append(f"「{val}」")
     
     if real_numeric_cols:
@@ -368,7 +368,6 @@ def generate_dynamic_examples(df):
 
 def extract_filter_from_query(query, df):
     """从用户问题中提取筛选条件"""
-    # 常见分类字段的筛选值
     text_cols = df.select_dtypes(include=['object']).columns.tolist()
     
     for col in text_cols:
@@ -581,8 +580,11 @@ if uploaded_file:
         st.markdown(f"📄 **{uploaded_file.name}** ({(uploaded_file.size / 1024):.1f} KB)")
     with col2:
         if st.button("🗑️ 删除", key="delete_btn"):
+            # 清空所有会话状态
             st.session_state.filtered_df = None
             st.session_state.has_result = False
+            st.session_state.current_df = None
+            # 强制刷新页面
             st.rerun()
     
     # 加载数据并清洗
