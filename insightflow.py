@@ -42,146 +42,13 @@ LOADING_MESSAGES = [
     "💡 有灵感了..."
 ]
 
-# ==================== 自定义 CSS ====================
-st.markdown(f"""
-<style>
-    .stApp {{ background-color: {BG_GRAY}; }}
-    
-    .card {{
-        background-color: white;
-        border-radius: 16px;
-        padding: 20px;
-        margin-bottom: 20px;
-        box-shadow: 0 2px 12px rgba(0,0,0,0.04);
-        border: 1px solid #E5E7EB;
-    }}
-    
-    .title {{
-        font-size: 48px;
-        font-weight: 700;
-        background: linear-gradient(135deg, {PRIMARY_BLUE}, {DARK_BLUE});
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        margin-bottom: 8px;
-    }}
-    
-    .stButton > button {{
-        background: linear-gradient(135deg, {PRIMARY_BLUE}, {DARK_BLUE});
-        color: white;
-        border: none;
-        border-radius: 40px;
-        padding: 12px 28px;
-        font-weight: 600;
-        font-size: 16px;
-        transition: all 0.3s ease;
-        width: 100%;
-    }}
-    .stButton > button:hover {{
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(30,136,229,0.3);
-    }}
-    
-    .stTextInput > div > div > input {{
-        border-radius: 40px;
-        border: 2px solid #E5E7EB;
-        padding: 12px 20px;
-        font-size: 16px;
-    }}
-    .stTextInput > div > div > input:focus {{
-        border-color: {PRIMARY_BLUE};
-        box-shadow: 0 0 0 2px rgba(30,136,229,0.1);
-    }}
-    
-    .ai-card {{
-        background: linear-gradient(135deg, {LIGHT_BLUE}, white);
-        border-radius: 16px;
-        padding: 20px;
-        border-left: 4px solid {PRIMARY_BLUE};
-        margin-top: 20px;
-    }}
-    
-    .stat-item {{
-        background: {LIGHT_BLUE};
-        border-radius: 12px;
-        padding: 8px 16px;
-        font-size: 14px;
-        display: inline-block;
-        margin-right: 12px;
-        margin-bottom: 8px;
-    }}
-    .stat-value {{
-        font-weight: 700;
-        color: {PRIMARY_BLUE};
-        margin-left: 6px;
-    }}
-    
-    hr {{ margin: 20px 0; border-color: #E5E7EB; }}
-    
-    .mode-badge-ai {{
-        background-color: #4CAF50;
-        color: white;
-        padding: 4px 12px;
-        border-radius: 20px;
-        font-size: 12px;
-        display: inline-block;
-        margin-bottom: 16px;
-    }}
-    
-    /* 美化原生上传组件 */
-    [data-testid="stFileUploader"] {{
-        width: 100%;
-    }}
-    [data-testid="stFileUploader"] > div:first-child {{
-        background: linear-gradient(135deg, {PRIMARY_BLUE}, {DARK_BLUE});
-        border-radius: 50px;
-        padding: 16px 40px;
-        text-align: center;
-        cursor: pointer;
-        transition: all 0.3s ease;
-        box-shadow: 0 2px 8px rgba(30,136,229,0.3);
-        border: none;
-    }}
-    [data-testid="stFileUploader"] > div:first-child:hover {{
-        transform: translateY(-2px);
-        box-shadow: 0 4px 16px rgba(30,136,229,0.4);
-    }}
-    [data-testid="stFileUploader"] button {{
-        background: transparent !important;
-        color: white !important;
-        font-size: 18px !important;
-        font-weight: 600 !important;
-        border: none !important;
-        padding: 0 !important;
-    }}
-    [data-testid="stFileUploader"] button svg {{
-        display: none;
-    }}
-    [data-testid="stFileUploader"] button:before {{
-        content: "🚀 点击上传 Excel 或 CSV";
-        font-size: 18px;
-        font-weight: 600;
-    }}
-</style>
-""", unsafe_allow_html=True)
-
-# ==================== 标题区域 ====================
-st.markdown("""
-<div style="text-align: center; margin-bottom: 32px;">
-    <h1 class="title">✨ InsightFlow · 智能数据决策助手</h1>
-    <p style="font-size: 18px; color: #666; margin-top: -8px;">
-        🤖 Built by Tuotuo09 · AI 数据智能平台
-    </p>
-    <p style="font-size: 14px; color: #888;">
-        💡 随便问 · AI 帮你分析 · 智能图表 · 决策建议
-    </p>
-</div>
-""", unsafe_allow_html=True)
-
 # ==================== 会话状态初始化 ====================
 if 'api_available' not in st.session_state:
     st.session_state.api_available = None
 if 'api_checked' not in st.session_state:
     st.session_state.api_checked = False
+if 'uploaded_file' not in st.session_state:
+    st.session_state.uploaded_file = None
 
 # ==================== DeepSeek API 配置 ====================
 DEEPSEEK_API_KEY = "sk-52bcbd3d232945828250c3a1408598ff"
@@ -446,15 +313,177 @@ def generate_dynamic_examples(df):
     
     return " · ".join(examples[:4])
 
+# ==================== 自定义 CSS ====================
+st.markdown(f"""
+<style>
+    .stApp {{ background-color: {BG_GRAY}; }}
+    
+    .card {{
+        background-color: white;
+        border-radius: 16px;
+        padding: 20px;
+        margin-bottom: 20px;
+        box-shadow: 0 2px 12px rgba(0,0,0,0.04);
+        border: 1px solid #E5E7EB;
+    }}
+    
+    .title {{
+        font-size: 48px;
+        font-weight: 700;
+        background: linear-gradient(135deg, {PRIMARY_BLUE}, {DARK_BLUE});
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        margin-bottom: 8px;
+    }}
+    
+    .stButton > button {{
+        background: linear-gradient(135deg, {PRIMARY_BLUE}, {DARK_BLUE});
+        color: white;
+        border: none;
+        border-radius: 40px;
+        padding: 12px 28px;
+        font-weight: 600;
+        font-size: 16px;
+        transition: all 0.3s ease;
+        width: 100%;
+    }}
+    .stButton > button:hover {{
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(30,136,229,0.3);
+    }}
+    
+    .stTextInput > div > div > input {{
+        border-radius: 40px;
+        border: 2px solid #E5E7EB;
+        padding: 12px 20px;
+        font-size: 16px;
+    }}
+    .stTextInput > div > div > input:focus {{
+        border-color: {PRIMARY_BLUE};
+        box-shadow: 0 0 0 2px rgba(30,136,229,0.1);
+    }}
+    
+    .ai-card {{
+        background: linear-gradient(135deg, {LIGHT_BLUE}, white);
+        border-radius: 16px;
+        padding: 20px;
+        border-left: 4px solid {PRIMARY_BLUE};
+        margin-top: 20px;
+    }}
+    
+    .stat-item {{
+        background: {LIGHT_BLUE};
+        border-radius: 12px;
+        padding: 8px 16px;
+        font-size: 14px;
+        display: inline-block;
+        margin-right: 12px;
+        margin-bottom: 8px;
+    }}
+    .stat-value {{
+        font-weight: 700;
+        color: {PRIMARY_BLUE};
+        margin-left: 6px;
+    }}
+    
+    hr {{ margin: 20px 0; border-color: #E5E7EB; }}
+    
+    .mode-badge-ai {{
+        background-color: #4CAF50;
+        color: white;
+        padding: 4px 12px;
+        border-radius: 20px;
+        font-size: 12px;
+        display: inline-block;
+        margin-bottom: 16px;
+    }}
+    
+    /* 美化上传按钮 */
+    .upload-btn {{
+        background: linear-gradient(135deg, {PRIMARY_BLUE}, {DARK_BLUE});
+        color: white;
+        padding: 16px 40px;
+        border-radius: 50px;
+        font-size: 18px;
+        font-weight: 600;
+        text-align: center;
+        display: inline-block;
+        width: 100%;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        box-shadow: 0 4px 12px rgba(30,136,229,0.3);
+        border: none;
+    }}
+    .upload-btn:hover {{
+        transform: translateY(-2px);
+        box-shadow: 0 6px 20px rgba(30,136,229,0.4);
+    }}
+    .file-info {{
+        background: white;
+        border-radius: 12px;
+        padding: 12px 20px;
+        margin-top: 12px;
+        border: 1px solid #E5E7EB;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }}
+    .delete-btn {{
+        background: #ff4444;
+        color: white;
+        border: none;
+        border-radius: 20px;
+        padding: 6px 16px;
+        cursor: pointer;
+        font-size: 14px;
+        transition: all 0.3s ease;
+    }}
+    .delete-btn:hover {{
+        background: #cc0000;
+        transform: scale(1.02);
+    }}
+</style>
+""", unsafe_allow_html=True)
+
+# ==================== 标题区域 ====================
+st.markdown("""
+<div style="text-align: center; margin-bottom: 32px;">
+    <h1 class="title">✨ InsightFlow · 智能数据决策助手</h1>
+    <p style="font-size: 18px; color: #666; margin-top: -8px;">
+        🤖 Built by Tuotuo09 · AI 数据智能平台
+    </p>
+    <p style="font-size: 14px; color: #888;">
+        💡 随便问 · AI 帮你分析 · 智能图表 · 决策建议
+    </p>
+</div>
+""", unsafe_allow_html=True)
+
 # ==================== 上传区域 ====================
-# 使用原生 file_uploader，通过 CSS 美化
-uploaded_file = st.file_uploader(
-    "",
-    type=['xlsx', 'xls', 'csv'],
-    label_visibility="collapsed"
-)
+# 自定义上传按钮
+col1, col2, col3 = st.columns([1, 2, 1])
+with col2:
+    # 上传按钮
+    uploaded_file = st.file_uploader(
+        "🚀 点击上传 Excel 或 CSV",
+        type=['xlsx', 'xls', 'csv'],
+        label_visibility="collapsed"
+    )
 
 if uploaded_file:
+    # 显示文件信息和删除按钮
+    st.markdown(f"""
+    <div class="file-info">
+        <span>📄 {uploaded_file.name} ({(uploaded_file.size / 1024):.1f} KB)</span>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # 删除按钮
+    col_del1, col_del2, col_del3 = st.columns([1, 2, 1])
+    with col_del2:
+        if st.button("🗑️ 删除文件", key="delete_btn", use_container_width=True):
+            st.session_state.uploaded_file = None
+            st.rerun()
+    
     # 加载数据
     if uploaded_file.name.endswith('.csv'):
         df = pd.read_csv(uploaded_file)
