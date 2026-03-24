@@ -49,6 +49,8 @@ if 'api_checked' not in st.session_state:
     st.session_state.api_checked = False
 if 'uploaded_file' not in st.session_state:
     st.session_state.uploaded_file = None
+if 'file_data' not in st.session_state:
+    st.session_state.file_data = None
 
 # ==================== DeepSeek API 配置 ====================
 DEEPSEEK_API_KEY = "sk-52bcbd3d232945828250c3a1408598ff"
@@ -318,6 +320,11 @@ st.markdown(f"""
 <style>
     .stApp {{ background-color: {BG_GRAY}; }}
     
+    /* 隐藏默认的上传区域 */
+    [data-testid="stFileUploader"] {{
+        display: none;
+    }}
+    
     .card {{
         background-color: white;
         border-radius: 16px;
@@ -341,11 +348,11 @@ st.markdown(f"""
         color: white;
         border: none;
         border-radius: 40px;
-        padding: 12px 28px;
+        padding: 10px 24px;
         font-weight: 600;
-        font-size: 16px;
+        font-size: 14px;
         transition: all 0.3s ease;
-        width: 100%;
+        width: auto;
     }}
     .stButton > button:hover {{
         transform: translateY(-2px);
@@ -398,7 +405,7 @@ st.markdown(f"""
         margin-bottom: 16px;
     }}
     
-    /* 美化上传按钮 */
+    /* 自定义上传按钮 */
     .upload-btn {{
         background: linear-gradient(135deg, {PRIMARY_BLUE}, {DARK_BLUE});
         color: white;
@@ -418,6 +425,8 @@ st.markdown(f"""
         transform: translateY(-2px);
         box-shadow: 0 6px 20px rgba(30,136,229,0.4);
     }}
+    
+    /* 文件信息卡片 */
     .file-info {{
         background: white;
         border-radius: 12px;
@@ -459,15 +468,31 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==================== 上传区域 ====================
-# 自定义上传按钮
+# 自定义上传按钮（隐藏原生组件，用按钮触发）
 col1, col2, col3 = st.columns([1, 2, 1])
 with col2:
-    # 上传按钮
+    # 隐藏的文件上传器
     uploaded_file = st.file_uploader(
-        "🚀 点击上传 Excel 或 CSV",
+        "",
         type=['xlsx', 'xls', 'csv'],
-        label_visibility="collapsed"
+        label_visibility="collapsed",
+        key="file_uploader"
     )
+    
+    # 自定义按钮样式（点击触发文件上传）
+    st.markdown("""
+    <div style="text-align: center;">
+        <label for="file-uploader" class="upload-btn">
+            🚀 点击上传 Excel 或 CSV
+        </label>
+    </div>
+    <script>
+        // 让自定义按钮触发文件上传
+        document.querySelector('.upload-btn').onclick = function() {
+            document.querySelector('input[type="file"]').click();
+        };
+    </script>
+    """, unsafe_allow_html=True)
 
 if uploaded_file:
     # 显示文件信息和删除按钮
@@ -478,9 +503,9 @@ if uploaded_file:
     """, unsafe_allow_html=True)
     
     # 删除按钮
-    col_del1, col_del2, col_del3 = st.columns([1, 2, 1])
-    with col_del2:
-        if st.button("🗑️ 删除文件", key="delete_btn", use_container_width=True):
+    col_del1, col_del2 = st.columns([1, 10])
+    with col_del1:
+        if st.button("🗑️ 删除", key="delete_btn"):
             st.session_state.uploaded_file = None
             st.rerun()
     
@@ -515,10 +540,8 @@ if uploaded_file:
     # 输入框
     query = st.text_input("", placeholder="例如：哪个部门人最多？｜薪资合理吗？｜给我一些建议", label_visibility="collapsed")
     
-    # 分析按钮（放在输入框下面，居中）
-    col_btn1, col_btn2, col_btn3 = st.columns([1, 2, 1])
-    with col_btn2:
-        analyze_btn = st.button("开始分析", type="primary", use_container_width=True)
+    # 开始分析按钮（左对齐，正常大小）
+    analyze_btn = st.button("🚀 开始分析", type="primary")
     
     # 动态示例
     examples = generate_dynamic_examples(df)
