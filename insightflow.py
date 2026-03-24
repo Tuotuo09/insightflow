@@ -1,7 +1,7 @@
 """
 InsightFlow - 智能数据决策助手
 作者：Tuotuo09
-功能：上传任意 Excel，自然语言提问，AI 智能分析 + 智能图表 + 决策建议
+功能：上传任意 Excel，自然语言提问，AI 智能分析 + 智能图表 + 决策建议 + 分页显示
 """
 
 import streamlit as st
@@ -47,6 +47,12 @@ if 'api_available' not in st.session_state:
     st.session_state.api_available = None
 if 'api_checked' not in st.session_state:
     st.session_state.api_checked = False
+if 'current_page' not in st.session_state:
+    st.session_state.current_page = 1
+if 'filtered_df' not in st.session_state:
+    st.session_state.filtered_df = None
+if 'filter_name' not in st.session_state:
+    st.session_state.filter_name = None
 
 # ==================== DeepSeek API 配置 ====================
 DEEPSEEK_API_KEY = "sk-52bcbd3d232945828250c3a1408598ff"
@@ -160,12 +166,11 @@ def ai_analyze(query, df):
 - 示例数据（前10行）：{json.dumps(sample_data, ensure_ascii=False)}
 
 【重要规则】
-1. 如果用户问「分布」「占比」，用 pie 图，chart_x 应该是分类字段（优先选择：部门、岗位、地区、状态），chart_y 用 "数量" 或 "人数"
+1. 如果用户问「分布」「占比」，用 pie 图，chart_x 应该是分类字段，chart_y 用 "数量"
 2. 如果用户问「前几名」「排名」「最高」，用 bar 图
 3. 如果用户问「趋势」「变化」，用 line 图
-4. 如果用户问「平均」「建议」「薪资合理吗」，chart_type 用 none
-5. 如果用户问的是具体部门（如技术部、销售部、市场部等），chart_type 用 none，不要显示图表
-6. 如果用户问的是筛选性问题（如「技术部平均年龄」「销售部有多少人」），chart_type 用 none
+4. 如果用户问的是具体部门（如技术部、销售部），需要筛选该部门的数据，filter 字段填写部门名称
+5. 如果用户问「平均年龄」「平均薪资」且指定了部门，需要筛选该部门
 
 请分析用户问题，并返回一个**纯 JSON 对象**。
 
@@ -174,6 +179,7 @@ JSON 格式：
     "chart_type": "pie或bar或line或none",
     "chart_x": "X轴字段名",
     "chart_y": "Y轴字段名",
+    "filter": "筛选条件，如：部门=技术部，如果没有筛选填 null",
     "insight": "数据洞察（一句话）",
     "recommendation": "决策建议（具体可操作）",
     "fun_fact": "趣味事实",
@@ -185,14 +191,12 @@ JSON 格式：
     response = call_deepseek(prompt)
     
     if response:
-        # 尝试多种方式解析 JSON
         try:
             result = json.loads(response)
             return result
         except:
             pass
         
-        # 提取 {} 内的内容
         json_match = re.search(r'\{[^{}]*\}', response, re.DOTALL)
         if json_match:
             try:
@@ -201,7 +205,6 @@ JSON 格式：
             except:
                 pass
         
-        # 提取更大的 JSON
         json_match_large = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', response, re.DOTALL)
         if json_match_large:
             try:
@@ -210,12 +213,12 @@ JSON 格式：
             except:
                 pass
         
-        # 默认结果
         return {
             "chart_type": "none",
-            "insight": f"数据共{len(df)}条记录，{len(df.columns)}个字段",
-            "recommendation": "试试问：「部门分布」「薪资前10」「平均年龄」",
-            "fun_fact": f"数值列有{len(real_numeric_cols)}个，文本列有{len(text_cols)}个",
+            "filter": None,
+            "insight": f"数据共{len(df)}条记录",
+            "recommendation": "试试问：「部门分布」「薪资前10」",
+            "fun_fact": f"数值列有{len(real_numeric_cols)}个",
             "summary": "分析完成"
         }
     
@@ -291,7 +294,6 @@ def generate_dynamic_examples(df):
     id_keywords = ['id', '编号', '工号', '序号', '员工id']
     real_numeric_cols = [c for c in numeric_cols if not any(kw in c.lower() for kw in id_keywords)]
     
-    # 优先选择有意义的分类字段
     priority_cols = ['部门', '岗位', '地区', '城市', '状态', '等级']
     selected_text = None
     for pc in priority_cols:
@@ -312,6 +314,56 @@ def generate_dynamic_examples(df):
         examples.append(f"「{text_cols[1]}」")
     
     return " · ".join(examples[:4])
+
+def display_paginated_table(df, title="数据列表", rows_per_page=10):
+    """分页显示表格"""
+    if df is None or len(df) == 0:
+        st.info("暂无数据")
+        return
+    
+    total_rows = len(df)
+    total_pages = (total_rows + rows_per_page - 1) // rows_per_page
+    
+    # 确保当前页在有效范围内
+    if st.session_state.current_page < 1:
+        st.session_state.current_page = 1
+    if st.session_state.current_page > total_pages:
+        st.session_state.current_page = total_pages
+    
+    # 计算当前页的数据范围
+    start_idx = (st.session_state.current_page - 1) * rows_per_page
+    end_idx = min(start_idx + rows_per_page, total_rows)
+    
+    # 显示标题和总数
+    st.markdown(f"**{title}**（共 {total_rows} 条记录，第 {st.session_state.current_page} / {total_pages} 页）")
+    
+    # 显示当前页数据
+    page_df = df.iloc[start_idx:end_idx]
+    st.dataframe(page_df, use_container_width=True)
+    
+    # 分页按钮
+    if total_pages > 1:
+        col1, col2, col3, col4, col5 = st.columns([1, 1, 2, 1, 1])
+        with col1:
+            if st.button("⏮️ 首页", key="first_page"):
+                st.session_state.current_page = 1
+                st.rerun()
+        with col2:
+            if st.button("◀ 上一页", key="prev_page"):
+                if st.session_state.current_page > 1:
+                    st.session_state.current_page -= 1
+                    st.rerun()
+        with col3:
+            st.markdown(f"<div style='text-align: center; padding-top: 8px;'>第 {st.session_state.current_page} / {total_pages} 页</div>", unsafe_allow_html=True)
+        with col4:
+            if st.button("下一页 ▶", key="next_page"):
+                if st.session_state.current_page < total_pages:
+                    st.session_state.current_page += 1
+                    st.rerun()
+        with col5:
+            if st.button("末页 ⏭️", key="last_page"):
+                st.session_state.current_page = total_pages
+                st.rerun()
 
 # ==================== 自定义 CSS ====================
 st.markdown(f"""
@@ -398,7 +450,6 @@ st.markdown(f"""
         margin-bottom: 16px;
     }}
     
-    /* 美化上传按钮 - 让 st.file_uploader 变成漂亮的按钮样式 */
     [data-testid="stFileUploader"] > div:first-child {{
         background: linear-gradient(135deg, {PRIMARY_BLUE}, {DARK_BLUE});
         border-radius: 50px;
@@ -429,8 +480,6 @@ st.markdown(f"""
         font-size: 18px;
         font-weight: 600;
     }}
-    
-    /* 隐藏默认的文件名显示区域，我们用自定义的 */
     [data-testid="stFileUploader"] > div:last-child {{
         display: none;
     }}
@@ -450,8 +499,7 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# ==================== 上传区域（原生组件，CSS 美化）====================
-# 居中显示
+# ==================== 上传区域 ====================
 col1, col2, col3 = st.columns([1, 2, 1])
 with col2:
     uploaded_file = st.file_uploader(
@@ -461,12 +509,13 @@ with col2:
     )
 
 if uploaded_file:
-    # 显示文件信息（自定义）
+    # 显示文件信息
     col1, col2 = st.columns([3, 1])
     with col1:
         st.markdown(f"📄 **{uploaded_file.name}** ({(uploaded_file.size / 1024):.1f} KB)")
     with col2:
         if st.button("🗑️ 删除", key="delete_btn"):
+            st.session_state.current_page = 1
             st.rerun()
     
     # 加载数据
@@ -497,13 +546,9 @@ if uploaded_file:
     # 问答区域
     st.markdown("---")
     
-    # 输入框
     query = st.text_input("", placeholder="例如：哪个部门人最多？｜薪资合理吗？｜给我一些建议", label_visibility="collapsed")
-    
-    # 开始分析按钮（左对齐，正常大小）
     analyze_btn = st.button("🚀 开始分析", type="primary")
     
-    # 动态示例
     examples = generate_dynamic_examples(df)
     st.caption(f"💡 试试这些：{examples}")
     
@@ -522,18 +567,32 @@ if uploaded_file:
                     chart_type = ai_result.get("chart_type", "none")
                     chart_x = ai_result.get("chart_x", None)
                     chart_y = ai_result.get("chart_y", None)
+                    filter_condition = ai_result.get("filter", None)
                     insight = ai_result.get("insight", "")
                     recommendation = ai_result.get("recommendation", "")
                     fun_fact = ai_result.get("fun_fact", "")
                     summary = ai_result.get("summary", "")
                     
+                    # 处理筛选
+                    display_df = df
+                    filter_name = None
+                    if filter_condition and "=" in filter_condition:
+                        filter_field, filter_value = filter_condition.split("=")
+                        filter_field = filter_field.strip()
+                        filter_value = filter_value.strip()
+                        if filter_field in df.columns:
+                            display_df = df[df[filter_field] == filter_value]
+                            filter_name = filter_value
+                            # 重置分页
+                            st.session_state.current_page = 1
+                    
                     # 准备图表数据
                     result_df = None
                     if chart_type != "none" and chart_x and chart_y and chart_x in df.columns and chart_y in df.columns:
                         if chart_type == "pie":
-                            result_df = df.groupby(chart_x)[chart_y].sum().reset_index()
+                            result_df = display_df.groupby(chart_x)[chart_y].sum().reset_index()
                         elif chart_type in ["bar", "line"]:
-                            result_df = df.groupby(chart_x)[chart_y].sum().reset_index()
+                            result_df = display_df.groupby(chart_x)[chart_y].sum().reset_index()
                             result_df = result_df.sort_values(chart_y, ascending=False).head(10)
                     
                     # 显示结果
@@ -547,26 +606,28 @@ if uploaded_file:
                     col_left, col_right = st.columns([3, 2])
                     
                     with col_left:
-                        if result_df is not None:
-                            st.dataframe(result_df, use_container_width=True)
+                        if filter_name:
+                            title = f"{filter_name}员工名单"
                         else:
-                            st.info("数据概览")
-                            st.dataframe(df.head(10), use_container_width=True)
+                            title = "数据列表"
+                        display_paginated_table(display_df, title, rows_per_page=10)
                     
                     with col_right:
                         if result_df is not None:
                             fig = create_chart(result_df, chart_type, chart_x, chart_y)
                             if fig:
                                 st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
-                        elif text_cols and chart_type != "none":
-                            # 只有在 chart_type 不是 none 时才显示默认图表
+                        elif chart_type == "none":
+                            # 不显示图表
+                            pass
+                        elif text_cols:
                             priority_cols = ['部门', '岗位', '地区', '状态']
                             chart_col = text_cols[0]
                             for pc in priority_cols:
                                 if pc in text_cols:
                                     chart_col = pc
                                     break
-                            default_data = df[chart_col].value_counts().head(5)
+                            default_data = display_df[chart_col].value_counts().head(5)
                             fig = px.pie(values=default_data.values, names=default_data.index, title=f"{chart_col}分布")
                             fig.update_traces(marker=dict(colors=px.colors.sequential.Blues_r), hole=0.3)
                             fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
