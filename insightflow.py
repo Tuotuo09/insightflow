@@ -132,6 +132,21 @@ def call_deepseek(prompt):
     except:
         return None
 
+def clean_dataframe(df):
+    """清洗数据框：过滤 Unnamed 列，处理空值"""
+    # 过滤掉 Unnamed 开头的列
+    valid_columns = [c for c in df.columns if not str(c).startswith('Unnamed')]
+    df = df[valid_columns]
+    
+    # 处理空值：数值列填0，文本列填空字符串
+    for col in df.columns:
+        if pd.api.types.is_numeric_dtype(df[col]):
+            df[col] = df[col].fillna(0)
+        else:
+            df[col] = df[col].fillna('')
+    
+    return df
+
 def ai_analyze(query, filtered_df, original_df):
     """AI 模式：智能分析 + 智能图表（基于筛选后的数据）"""
     df = filtered_df if filtered_df is not None else original_df
@@ -139,7 +154,7 @@ def ai_analyze(query, filtered_df, original_df):
     numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
     text_cols = df.select_dtypes(include=['object']).columns.tolist()
     
-    # 排除 ID 类字段
+    # 排除 ID 类字段和 Unnamed 列
     id_keywords = ['id', '编号', '工号', '序号', '员工id', '用户id']
     real_numeric_cols = [c for c in numeric_cols if not any(kw in c.lower() for kw in id_keywords)]
     if not real_numeric_cols:
@@ -194,6 +209,12 @@ def ai_analyze(query, filtered_df, original_df):
 2. insight: 深度洞察，包含问题诊断和风险识别
 3. recommendation: 可执行的行动建议，分优先级（高/中/低）
 4. fun_fact: 一个有趣的数据发现
+
+【图表选择规则】
+- 如果用户问「分布」「占比」，用 pie 图，chart_x 用分类字段，chart_y 用计数字段
+- 如果用户问「前几名」「排名」「最高」，用 bar 图
+- 如果用户问「趋势」「变化」，用 line 图
+- 其他情况用 none
 
 JSON 格式：
 {{
@@ -300,7 +321,7 @@ def create_chart(df, chart_type, x_col, y_col):
                 plot_bgcolor='rgba(0,0,0,0)'
             )
             return fig
-    except:
+    except Exception as e:
         return None
     return None
 
@@ -328,7 +349,8 @@ def generate_dynamic_examples(df):
         # 获取该字段的前2个常见值作为筛选示例
         top_values = df[selected_text].value_counts().head(2).index.tolist()
         for val in top_values:
-            examples.append(f"「{val}」")
+            if val and str(val).strip():
+                examples.append(f"「{val}」")
     
     if real_numeric_cols:
         examples.append(f"「{real_numeric_cols[0]}前10」")
@@ -346,15 +368,13 @@ def generate_dynamic_examples(df):
 
 def extract_filter_from_query(query, df):
     """从用户问题中提取筛选条件"""
-    query_lower = query.lower()
-    
     # 常见分类字段的筛选值
     text_cols = df.select_dtypes(include=['object']).columns.tolist()
     
     for col in text_cols:
-        unique_vals = df[col].unique().tolist()
+        unique_vals = df[col].dropna().unique().tolist()
         for val in unique_vals:
-            if str(val) in query:
+            if val and str(val) in query:
                 return col, str(val)
     return None, None
 
@@ -565,12 +585,13 @@ if uploaded_file:
             st.session_state.has_result = False
             st.rerun()
     
-    # 加载数据
+    # 加载数据并清洗
     if uploaded_file.name.endswith('.csv'):
         df = pd.read_csv(uploaded_file)
     else:
         df = pd.read_excel(uploaded_file)
     
+    df = clean_dataframe(df)
     st.session_state.current_df = df
     
     # 数据详情（可展开）
@@ -632,14 +653,19 @@ if uploaded_file:
                     recommendation = ai_result.get("recommendation", "")
                     fun_fact = ai_result.get("fun_fact", "")
                     
-                    # 准备图表数据
+                    # 准备图表数据（增加异常保护）
                     result_df = None
-                    if chart_type != "none" and chart_x and chart_y and chart_x in display_df.columns and chart_y in display_df.columns:
-                        if chart_type == "pie":
-                            result_df = display_df.groupby(chart_x)[chart_y].sum().reset_index()
-                        elif chart_type in ["bar", "line"]:
-                            result_df = display_df.groupby(chart_x)[chart_y].sum().reset_index()
-                            result_df = result_df.sort_values(chart_y, ascending=False).head(10)
+                    if chart_type != "none" and chart_x and chart_y:
+                        if chart_x in display_df.columns and chart_y in display_df.columns:
+                            if pd.api.types.is_numeric_dtype(display_df[chart_y]):
+                                try:
+                                    if chart_type == "pie":
+                                        result_df = display_df.groupby(chart_x)[chart_y].sum().reset_index()
+                                    elif chart_type in ["bar", "line"]:
+                                        result_df = display_df.groupby(chart_x)[chart_y].sum().reset_index()
+                                        result_df = result_df.sort_values(chart_y, ascending=False).head(10)
+                                except Exception as e:
+                                    result_df = None
                     
                     # 保存所有结果到 session_state
                     st.session_state.filtered_df = display_df
