@@ -275,55 +275,87 @@ def ai_analyze(query, df):
                 row_dict[col] = str(val)
         sample_data.append(row_dict)
     
-    prompt = f"""
-用户问题：{query}
+    prompt = f"""用户问题：{query}
 
 数据概况：
 - {stats}
 - 关键统计：{json.dumps(summary, ensure_ascii=False)}
 - 示例数据（前10行）：{json.dumps(sample_data, ensure_ascii=False)}
 
-请分析用户问题，并返回一个**纯 JSON 对象**，不要有任何其他文字。
+请分析用户问题，并返回一个**纯 JSON 对象**。
 
 根据用户问题，判断应该做什么分析，然后返回 JSON。
 
 JSON 格式：
 {{
     "chart_type": "pie或bar或line或none",
-    "chart_x": "X轴字段名（如果是pie/bar/line需要填）",
-    "chart_y": "Y轴字段名（如果是pie/bar/line需要填）",
-    "insight": "数据洞察（一句话，说明数据含义）",
-    "recommendation": "决策建议（具体可操作的建议）",
-    "fun_fact": "趣味事实（有趣的数据发现）",
-    "summary": "分析结果总结（一句话）"
+    "chart_x": "X轴字段名",
+    "chart_y": "Y轴字段名",
+    "insight": "数据洞察（一句话）",
+    "recommendation": "决策建议（具体可操作）",
+    "fun_fact": "趣味事实",
+    "summary": "分析结果总结"
 }}
 
-示例：
-- 问「部门分布」→ {{"chart_type":"pie","chart_x":"部门","chart_y":"人数","insight":"技术部人数最多，占35%","recommendation":"技术部人才密度高，建议关注人才梯队建设","fun_fact":"技术部比销售部多15人","summary":"部门分布：技术部最多"}}
-- 问「薪资前10」→ {{"chart_type":"bar","chart_x":"姓名","chart_y":"薪资","insight":"最高薪资32000元，平均薪资18500元","recommendation":"关注高薪岗位市场竞争力，确保薪酬公平","fun_fact":"前10名平均薪资25000元","summary":"薪资排名前10"}}
-- 问「平均年龄」→ {{"chart_type":"none","chart_x":null,"chart_y":null,"insight":"平均年龄34岁，团队年轻化","recommendation":"建议加强导师制，培养年轻骨干","fun_fact":"最年轻22岁，最年长55岁","summary":"平均年龄34岁"}}
-- 问「技术部」→ {{"chart_type":"none","chart_x":null,"chart_y":null,"insight":"技术部35人，占比35%","recommendation":"技术部规模最大，建议保持技术投入","fun_fact":"技术部平均年龄31岁，最年轻","summary":"技术部共35人"}}
-- 问「给我一些建议」→ {{"chart_type":"none","chart_x":null,"chart_y":null,"insight":"数据整体健康，各指标正常","recommendation":"建议定期监控关键指标变化，关注异常波动","fun_fact":"数据共{len(df)}条记录，涵盖{len(df.columns)}个维度","summary":"数据分析完成"}}
-
-请根据用户的实际问题，分析数据后返回对应的 JSON。只返回 JSON，不要有其他内容。
-"""
+只返回 JSON 对象，不要有任何其他文字。"""
     
     response = call_deepseek(prompt)
     
+    # 尝试多种方式解析 JSON
     if response:
+        # 方式1：直接解析
         try:
-            # 尝试解析 JSON
             result = json.loads(response)
             return result
-        except Exception as e:
-            # JSON 解析失败，返回默认结构
-            return {
-                "chart_type": "none",
-                "insight": f"数据共{len(df)}条记录，{len(df.columns)}个字段",
-                "recommendation": "试试问：「部门分布」「薪资前10」「平均年龄」",
-                "fun_fact": f"数值列有{len(real_numeric_cols)}个，文本列有{len(text_cols)}个",
-                "summary": "分析完成"
-            }
+        except:
+            pass
+        
+        # 方式2：提取 {} 内的内容
+        import re
+        json_match = re.search(r'\{[^{}]*\}', response, re.DOTALL)
+        if json_match:
+            try:
+                result = json.loads(json_match.group())
+                return result
+            except:
+                pass
+        
+        # 方式3：提取更大的 JSON
+        json_match_large = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', response, re.DOTALL)
+        if json_match_large:
+            try:
+                result = json.loads(json_match_large.group())
+                return result
+            except:
+                pass
+        
+        # 方式4：手动构建默认结果（根据数据生成有意义的建议）
+        default_insight = f"数据共{len(df)}条记录，{len(df.columns)}个字段"
+        default_recommendation = "试试问：「部门分布」「薪资前10」「平均年龄」"
+        default_fun_fact = f"数值列有{len(real_numeric_cols)}个，文本列有{len(text_cols)}个"
+        default_summary = "分析完成"
+        
+        # 尝试从用户问题中提取关键词生成更智能的默认结果
+        query_lower = query.lower()
+        if "分布" in query_lower and text_cols:
+            default_insight = f"可查看{text_cols[0]}的分布情况"
+            default_recommendation = f"建议分析{text_cols[0]}的构成比例"
+        elif "前" in query_lower and real_numeric_cols:
+            default_insight = f"可查看{real_numeric_cols[0]}的排名"
+            default_recommendation = f"建议关注{real_numeric_cols[0]}较高的记录"
+        elif "平均" in query_lower and real_numeric_cols:
+            avg_val = df[real_numeric_cols[0]].mean()
+            default_insight = f"平均{real_numeric_cols[0]}为{avg_val:.0f}"
+            default_recommendation = f"建议对比各部门的{real_numeric_cols[0]}水平"
+        
+        return {
+            "chart_type": "none",
+            "insight": default_insight,
+            "recommendation": default_recommendation,
+            "fun_fact": default_fun_fact,
+            "summary": default_summary
+        }
+    
     return None
 
 def create_chart(df, chart_type, x_col, y_col):
