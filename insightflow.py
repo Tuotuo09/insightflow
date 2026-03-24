@@ -172,7 +172,7 @@ if 'api_checked' not in st.session_state:
     st.session_state.api_checked = False
 
 # ==================== DeepSeek API 配置 ====================
-DEEPSEEK_API_KEY = "sk-你的密钥"  # 请替换为你的 DeepSeek API Key
+DEEPSEEK_API_KEY = "sk-52bcbd3d232945828250c3a1408598ff"  # 请替换为你的 DeepSeek API Key
 
 def check_api_availability():
     """检查 API 是否可用"""
