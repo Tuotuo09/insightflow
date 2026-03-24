@@ -179,7 +179,7 @@ def check_api_availability():
     if st.session_state.api_checked:
         return st.session_state.api_available
     
-    if not DEEPSEEK_API_KEY or DEEPSEEK_API_KEY == "sk-52bcbd3d232945828250c3a1408598ff":
+    if not DEEPSEEK_API_KEY or DEEPSEEK_API_KEY == "sk-你的密钥":
         st.session_state.api_available = False
         st.session_state.api_checked = True
         return False
