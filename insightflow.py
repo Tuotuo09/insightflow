@@ -127,7 +127,7 @@ st.markdown(f"""
         margin-bottom: 16px;
     }}
     
-    /* 隐藏默认上传组件 */
+    /* 隐藏默认的 Streamlit 上传组件 */
     [data-testid="stFileUploader"] {{
         display: none;
     }}
@@ -146,6 +146,7 @@ st.markdown(f"""
         display: inline-block;
         text-align: center;
         border: none;
+        width: auto;
     }}
     .custom-upload-btn:hover {{
         transform: translateY(-2px);
@@ -441,23 +442,25 @@ def generate_dynamic_examples(df):
     
     return " · ".join(examples[:4])
 
-# ==================== 上传区域（纯按钮）====================
+# ==================== 上传区域（可点击按钮）====================
 # 显示自定义按钮
-st.markdown("""
-<div class="upload-container">
-    <label for="file-upload" class="custom-upload-btn">
-        🚀 点击上传 Excel 或 CSV
-    </label>
-</div>
-""", unsafe_allow_html=True)
-
-# 隐藏的文件上传器
-uploaded_file = st.file_uploader(
-    "",
-    type=['xlsx', 'xls', 'csv'],
-    label_visibility="collapsed",
-    key="file_uploader"
-)
+col1, col2, col3 = st.columns([1, 2, 1])
+with col2:
+    st.markdown("""
+    <div style="text-align: center;">
+        <label for="file-upload-trigger" class="custom-upload-btn" style="cursor: pointer;">
+            🚀 点击上传 Excel 或 CSV
+        </label>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # 使用 key 和 on_change 来触发
+    uploaded_file = st.file_uploader(
+        "",
+        type=['xlsx', 'xls', 'csv'],
+        label_visibility="collapsed",
+        key="file_uploader"
+    )
 
 if uploaded_file:
     # 加载数据
