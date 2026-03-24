@@ -17,7 +17,7 @@ import random
 # ==================== 页面配置 ====================
 st.set_page_config(
     page_title="InsightFlow · 智能数据决策助手",
-    page_icon="🤖",
+    page_icon="🚀",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
@@ -63,20 +63,6 @@ st.markdown(f"""
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         margin-bottom: 8px;
-    }}
-    
-    .upload-area {{
-        border: 2px dashed {PRIMARY_BLUE};
-        border-radius: 16px;
-        padding: 30px;
-        text-align: center;
-        background-color: white;
-        transition: all 0.3s ease;
-        cursor: pointer;
-    }}
-    .upload-area:hover {{
-        border-color: {DARK_BLUE};
-        background-color: {LIGHT_BLUE};
     }}
     
     .stButton > button {{
@@ -139,6 +125,36 @@ st.markdown(f"""
         font-size: 12px;
         display: inline-block;
         margin-bottom: 16px;
+    }}
+    
+    /* 隐藏默认上传组件 */
+    [data-testid="stFileUploader"] {{
+        display: none;
+    }}
+    
+    /* 自定义上传按钮样式 */
+    .custom-upload-btn {{
+        background: linear-gradient(135deg, {PRIMARY_BLUE}, {DARK_BLUE});
+        color: white;
+        padding: 16px 40px;
+        border-radius: 50px;
+        font-size: 18px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        box-shadow: 0 2px 8px rgba(30,136,229,0.3);
+        display: inline-block;
+        text-align: center;
+        border: none;
+    }}
+    .custom-upload-btn:hover {{
+        transform: translateY(-2px);
+        box-shadow: 0 4px 16px rgba(30,136,229,0.4);
+    }}
+    .upload-container {{
+        display: flex;
+        justify-content: center;
+        margin: 20px 0;
     }}
 </style>
 """, unsafe_allow_html=True)
@@ -425,18 +441,22 @@ def generate_dynamic_examples(df):
     
     return " · ".join(examples[:4])
 
-# ==================== 上传区域（简化版）====================
+# ==================== 上传区域（纯按钮）====================
+# 显示自定义按钮
 st.markdown("""
-<div class="upload-area" style="text-align: center;">
-    <div style="font-size: 40px; margin-bottom: 12px;">📁</div>
-    <div style="font-size: 18px; font-weight: 500;">点击上传 Excel 或 CSV</div>
+<div class="upload-container">
+    <label for="file-upload" class="custom-upload-btn">
+        🚀 点击上传 Excel 或 CSV
+    </label>
 </div>
 """, unsafe_allow_html=True)
 
+# 隐藏的文件上传器
 uploaded_file = st.file_uploader(
     "",
     type=['xlsx', 'xls', 'csv'],
-    label_visibility="collapsed"
+    label_visibility="collapsed",
+    key="file_uploader"
 )
 
 if uploaded_file:
@@ -471,7 +491,7 @@ if uploaded_file:
     # 输入框
     query = st.text_input("", placeholder="例如：哪个部门人最多？｜薪资合理吗？｜给我一些建议", label_visibility="collapsed")
     
-    # 分析按钮（放在输入框下面）
+    # 分析按钮（放在输入框下面，居中）
     col_btn1, col_btn2, col_btn3 = st.columns([1, 2, 1])
     with col_btn2:
         analyze_btn = st.button("开始分析", type="primary", use_container_width=True)
