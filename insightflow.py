@@ -127,35 +127,39 @@ st.markdown(f"""
         margin-bottom: 16px;
     }}
     
-    /* 隐藏默认的 Streamlit 上传组件 */
+    /* 美化原生上传组件 */
     [data-testid="stFileUploader"] {{
-        display: none;
+        width: 100%;
     }}
-    
-    /* 自定义上传按钮样式 */
-    .custom-upload-btn {{
+    [data-testid="stFileUploader"] > div:first-child {{
         background: linear-gradient(135deg, {PRIMARY_BLUE}, {DARK_BLUE});
-        color: white;
-        padding: 16px 40px;
         border-radius: 50px;
-        font-size: 18px;
-        font-weight: 600;
+        padding: 16px 40px;
+        text-align: center;
         cursor: pointer;
         transition: all 0.3s ease;
         box-shadow: 0 2px 8px rgba(30,136,229,0.3);
-        display: inline-block;
-        text-align: center;
         border: none;
-        width: auto;
     }}
-    .custom-upload-btn:hover {{
+    [data-testid="stFileUploader"] > div:first-child:hover {{
         transform: translateY(-2px);
         box-shadow: 0 4px 16px rgba(30,136,229,0.4);
     }}
-    .upload-container {{
-        display: flex;
-        justify-content: center;
-        margin: 20px 0;
+    [data-testid="stFileUploader"] button {{
+        background: transparent !important;
+        color: white !important;
+        font-size: 18px !important;
+        font-weight: 600 !important;
+        border: none !important;
+        padding: 0 !important;
+    }}
+    [data-testid="stFileUploader"] button svg {{
+        display: none;
+    }}
+    [data-testid="stFileUploader"] button:before {{
+        content: "🚀 点击上传 Excel 或 CSV";
+        font-size: 18px;
+        font-weight: 600;
     }}
 </style>
 """, unsafe_allow_html=True)
@@ -442,25 +446,13 @@ def generate_dynamic_examples(df):
     
     return " · ".join(examples[:4])
 
-# ==================== 上传区域（可点击按钮）====================
-# 显示自定义按钮
-col1, col2, col3 = st.columns([1, 2, 1])
-with col2:
-    st.markdown("""
-    <div style="text-align: center;">
-        <label for="file-upload-trigger" class="custom-upload-btn" style="cursor: pointer;">
-            🚀 点击上传 Excel 或 CSV
-        </label>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # 使用 key 和 on_change 来触发
-    uploaded_file = st.file_uploader(
-        "",
-        type=['xlsx', 'xls', 'csv'],
-        label_visibility="collapsed",
-        key="file_uploader"
-    )
+# ==================== 上传区域 ====================
+# 使用原生 file_uploader，通过 CSS 美化
+uploaded_file = st.file_uploader(
+    "",
+    type=['xlsx', 'xls', 'csv'],
+    label_visibility="collapsed"
+)
 
 if uploaded_file:
     # 加载数据
