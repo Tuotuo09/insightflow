@@ -163,7 +163,9 @@ def ai_analyze(query, df):
 1. 如果用户问「分布」「占比」，用 pie 图，chart_x 应该是分类字段（优先选择：部门、岗位、地区、状态），chart_y 用 "数量" 或 "人数"
 2. 如果用户问「前几名」「排名」「最高」，用 bar 图
 3. 如果用户问「趋势」「变化」，用 line 图
-4. 如果用户问「平均」「建议」，chart_type 用 none
+4. 如果用户问「平均」「建议」「薪资合理吗」，chart_type 用 none
+5. 如果用户问的是具体部门（如技术部、销售部、市场部等），chart_type 用 none，不要显示图表
+6. 如果用户问的是筛选性问题（如「技术部平均年龄」「销售部有多少人」），chart_type 用 none
 
 请分析用户问题，并返回一个**纯 JSON 对象**。
 
@@ -556,8 +558,8 @@ if uploaded_file:
                             fig = create_chart(result_df, chart_type, chart_x, chart_y)
                             if fig:
                                 st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
-                        elif text_cols:
-                            # 优先选择有意义的分类字段
+                        elif text_cols and chart_type != "none":
+                            # 只有在 chart_type 不是 none 时才显示默认图表
                             priority_cols = ['部门', '岗位', '地区', '状态']
                             chart_col = text_cols[0]
                             for pc in priority_cols:
