@@ -283,29 +283,45 @@ def ai_analyze(query, df):
 - 关键统计：{json.dumps(summary, ensure_ascii=False)}
 - 示例数据（前10行）：{json.dumps(sample_data, ensure_ascii=False)}
 
-请分析用户问题，并返回 JSON 格式的结果。JSON 必须包含以下字段：
-- chart_type: 图表类型，可选值：'pie'(饼图，用于分布)、'bar'(柱状图，用于排名/对比)、'line'(折线图，用于趋势)、'none'(不需要图表)
-- chart_x: 图表X轴字段名（如果有图表）
-- chart_y: 图表Y轴字段名（如果有图表）
-- insight: 数据洞察（100字以内）
-- recommendation: 决策建议（150字以内，具体可操作）
-- fun_fact: 趣味事实（50字以内）
-- summary: 一句话总结分析结果（50字以内）
+请分析用户问题，并返回一个**纯 JSON 对象**，不要有任何其他文字。
 
-只返回 JSON，不要有其他内容。
+根据用户问题，判断应该做什么分析，然后返回 JSON。
+
+JSON 格式：
+{{
+    "chart_type": "pie或bar或line或none",
+    "chart_x": "X轴字段名（如果是pie/bar/line需要填）",
+    "chart_y": "Y轴字段名（如果是pie/bar/line需要填）",
+    "insight": "数据洞察（一句话，说明数据含义）",
+    "recommendation": "决策建议（具体可操作的建议）",
+    "fun_fact": "趣味事实（有趣的数据发现）",
+    "summary": "分析结果总结（一句话）"
+}}
+
+示例：
+- 问「部门分布」→ {{"chart_type":"pie","chart_x":"部门","chart_y":"人数","insight":"技术部人数最多，占35%","recommendation":"技术部人才密度高，建议关注人才梯队建设","fun_fact":"技术部比销售部多15人","summary":"部门分布：技术部最多"}}
+- 问「薪资前10」→ {{"chart_type":"bar","chart_x":"姓名","chart_y":"薪资","insight":"最高薪资32000元，平均薪资18500元","recommendation":"关注高薪岗位市场竞争力，确保薪酬公平","fun_fact":"前10名平均薪资25000元","summary":"薪资排名前10"}}
+- 问「平均年龄」→ {{"chart_type":"none","chart_x":null,"chart_y":null,"insight":"平均年龄34岁，团队年轻化","recommendation":"建议加强导师制，培养年轻骨干","fun_fact":"最年轻22岁，最年长55岁","summary":"平均年龄34岁"}}
+- 问「技术部」→ {{"chart_type":"none","chart_x":null,"chart_y":null,"insight":"技术部35人，占比35%","recommendation":"技术部规模最大，建议保持技术投入","fun_fact":"技术部平均年龄31岁，最年轻","summary":"技术部共35人"}}
+- 问「给我一些建议」→ {{"chart_type":"none","chart_x":null,"chart_y":null,"insight":"数据整体健康，各指标正常","recommendation":"建议定期监控关键指标变化，关注异常波动","fun_fact":"数据共{len(df)}条记录，涵盖{len(df.columns)}个维度","summary":"数据分析完成"}}
+
+请根据用户的实际问题，分析数据后返回对应的 JSON。只返回 JSON，不要有其他内容。
 """
     
     response = call_deepseek(prompt)
     
     if response:
         try:
-            return json.loads(response)
-        except:
+            # 尝试解析 JSON
+            result = json.loads(response)
+            return result
+        except Exception as e:
+            # JSON 解析失败，返回默认结构
             return {
                 "chart_type": "none",
-                "insight": "AI 分析完成",
-                "recommendation": "请查看数据详情",
-                "fun_fact": f"数据共{len(df)}条记录",
+                "insight": f"数据共{len(df)}条记录，{len(df.columns)}个字段",
+                "recommendation": "试试问：「部门分布」「薪资前10」「平均年龄」",
+                "fun_fact": f"数值列有{len(real_numeric_cols)}个，文本列有{len(text_cols)}个",
                 "summary": "分析完成"
             }
     return None
