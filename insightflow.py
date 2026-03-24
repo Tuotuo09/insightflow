@@ -47,12 +47,18 @@ if 'api_available' not in st.session_state:
     st.session_state.api_available = None
 if 'api_checked' not in st.session_state:
     st.session_state.api_checked = False
-if 'current_page' not in st.session_state:
-    st.session_state.current_page = 1
 if 'filtered_df' not in st.session_state:
     st.session_state.filtered_df = None
 if 'filter_name' not in st.session_state:
     st.session_state.filter_name = None
+if 'current_result_df' not in st.session_state:
+    st.session_state.current_result_df = None
+if 'current_chart_type' not in st.session_state:
+    st.session_state.current_chart_type = None
+if 'current_chart_x' not in st.session_state:
+    st.session_state.current_chart_x = None
+if 'current_chart_y' not in st.session_state:
+    st.session_state.current_chart_y = None
 
 # ==================== DeepSeek API 配置 ====================
 DEEPSEEK_API_KEY = "sk-52bcbd3d232945828250c3a1408598ff"
@@ -315,7 +321,7 @@ def generate_dynamic_examples(df):
     
     return " · ".join(examples[:4])
 
-def display_paginated_table(df, title="数据列表", rows_per_page=10):
+def display_paginated_table(df, title="数据列表", rows_per_page=10, key_prefix="table"):
     """分页显示表格"""
     if df is None or len(df) == 0:
         st.info("暂无数据")
@@ -324,45 +330,49 @@ def display_paginated_table(df, title="数据列表", rows_per_page=10):
     total_rows = len(df)
     total_pages = (total_rows + rows_per_page - 1) // rows_per_page
     
-    # 确保当前页在有效范围内
-    if st.session_state.current_page < 1:
-        st.session_state.current_page = 1
-    if st.session_state.current_page > total_pages:
-        st.session_state.current_page = total_pages
+    # 使用独立的 session_state key
+    page_key = f"page_{key_prefix}"
+    if page_key not in st.session_state:
+        st.session_state[page_key] = 1
     
-    # 计算当前页的数据范围
-    start_idx = (st.session_state.current_page - 1) * rows_per_page
+    current_page = st.session_state[page_key]
+    if current_page < 1:
+        current_page = 1
+        st.session_state[page_key] = 1
+    if current_page > total_pages:
+        current_page = total_pages
+        st.session_state[page_key] = total_pages
+    
+    start_idx = (current_page - 1) * rows_per_page
     end_idx = min(start_idx + rows_per_page, total_rows)
     
-    # 显示标题和总数
-    st.markdown(f"**{title}**（共 {total_rows} 条记录，第 {st.session_state.current_page} / {total_pages} 页）")
+    st.markdown(f"**{title}**（共 {total_rows} 条记录，第 {current_page} / {total_pages} 页）")
     
-    # 显示当前页数据
     page_df = df.iloc[start_idx:end_idx]
     st.dataframe(page_df, use_container_width=True)
     
-    # 分页按钮
+    # 分页按钮 - 浅蓝色样式
     if total_pages > 1:
         col1, col2, col3, col4, col5 = st.columns([1, 1, 2, 1, 1])
         with col1:
-            if st.button("⏮️ 首页", key="first_page"):
-                st.session_state.current_page = 1
+            if st.button("⏮️ 首页", key=f"first_{key_prefix}"):
+                st.session_state[page_key] = 1
                 st.rerun()
         with col2:
-            if st.button("◀ 上一页", key="prev_page"):
-                if st.session_state.current_page > 1:
-                    st.session_state.current_page -= 1
+            if st.button("◀ 上一页", key=f"prev_{key_prefix}"):
+                if st.session_state[page_key] > 1:
+                    st.session_state[page_key] -= 1
                     st.rerun()
         with col3:
-            st.markdown(f"<div style='text-align: center; padding-top: 8px;'>第 {st.session_state.current_page} / {total_pages} 页</div>", unsafe_allow_html=True)
+            st.markdown(f"<div style='text-align: center; padding-top: 8px; color: {PRIMARY_BLUE};'>第 {current_page} / {total_pages} 页</div>", unsafe_allow_html=True)
         with col4:
-            if st.button("下一页 ▶", key="next_page"):
-                if st.session_state.current_page < total_pages:
-                    st.session_state.current_page += 1
+            if st.button("下一页 ▶", key=f"next_{key_prefix}"):
+                if st.session_state[page_key] < total_pages:
+                    st.session_state[page_key] += 1
                     st.rerun()
         with col5:
-            if st.button("末页 ⏭️", key="last_page"):
-                st.session_state.current_page = total_pages
+            if st.button("末页 ⏭️", key=f"last_{key_prefix}"):
+                st.session_state[page_key] = total_pages
                 st.rerun()
 
 # ==================== 自定义 CSS ====================
@@ -402,6 +412,12 @@ st.markdown(f"""
     .stButton > button:hover {{
         transform: translateY(-2px);
         box-shadow: 0 4px 12px rgba(30,136,229,0.3);
+    }}
+    
+    /* 分页按钮样式 - 浅蓝色 */
+    .stButton > button:has(> :contains("首页")) {{
+        background: {LIGHT_BLUE} !important;
+        color: {PRIMARY_BLUE} !important;
     }}
     
     .stTextInput > div > div > input {{
@@ -515,7 +531,8 @@ if uploaded_file:
         st.markdown(f"📄 **{uploaded_file.name}** ({(uploaded_file.size / 1024):.1f} KB)")
     with col2:
         if st.button("🗑️ 删除", key="delete_btn"):
-            st.session_state.current_page = 1
+            st.session_state.filtered_df = None
+            st.session_state.filter_name = None
             st.rerun()
     
     # 加载数据
@@ -583,17 +600,25 @@ if uploaded_file:
                         if filter_field in df.columns:
                             display_df = df[df[filter_field] == filter_value]
                             filter_name = filter_value
-                            # 重置分页
-                            st.session_state.current_page = 1
+                    
+                    # 保存到 session_state
+                    st.session_state.filtered_df = display_df
+                    st.session_state.filter_name = filter_name
                     
                     # 准备图表数据
                     result_df = None
-                    if chart_type != "none" and chart_x and chart_y and chart_x in df.columns and chart_y in df.columns:
+                    if chart_type != "none" and chart_x and chart_y and chart_x in display_df.columns and chart_y in display_df.columns:
                         if chart_type == "pie":
                             result_df = display_df.groupby(chart_x)[chart_y].sum().reset_index()
                         elif chart_type in ["bar", "line"]:
                             result_df = display_df.groupby(chart_x)[chart_y].sum().reset_index()
                             result_df = result_df.sort_values(chart_y, ascending=False).head(10)
+                    
+                    # 保存图表数据
+                    st.session_state.current_result_df = result_df
+                    st.session_state.current_chart_type = chart_type
+                    st.session_state.current_chart_x = chart_x
+                    st.session_state.current_chart_y = chart_y
                     
                     # 显示结果
                     st.markdown("---")
@@ -610,17 +635,15 @@ if uploaded_file:
                             title = f"{filter_name}员工名单"
                         else:
                             title = "数据列表"
-                        display_paginated_table(display_df, title, rows_per_page=10)
+                        display_paginated_table(display_df, title, rows_per_page=10, key_prefix="main")
                     
                     with col_right:
                         if result_df is not None:
                             fig = create_chart(result_df, chart_type, chart_x, chart_y)
                             if fig:
                                 st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
-                        elif chart_type == "none":
-                            # 不显示图表
-                            pass
-                        elif text_cols:
+                        elif chart_type == "pie" and text_cols:
+                            # 显示默认分布图
                             priority_cols = ['部门', '岗位', '地区', '状态']
                             chart_col = text_cols[0]
                             for pc in priority_cols:
@@ -653,6 +676,32 @@ if uploaded_file:
     
     elif analyze_btn and not query:
         st.warning("💡 请输入一个问题～")
+    
+    # 如果有保存的图表数据，显示它们（用于翻页后保持）
+    elif st.session_state.current_result_df is not None and not analyze_btn:
+        st.markdown("---")
+        st.markdown("### 📊 分析结果")
+        
+        col_left, col_right = st.columns([3, 2])
+        
+        with col_left:
+            if st.session_state.filter_name:
+                title = f"{st.session_state.filter_name}员工名单"
+            else:
+                title = "数据列表"
+            if st.session_state.filtered_df is not None:
+                display_paginated_table(st.session_state.filtered_df, title, rows_per_page=10, key_prefix="main")
+        
+        with col_right:
+            if st.session_state.current_result_df is not None:
+                fig = create_chart(
+                    st.session_state.current_result_df,
+                    st.session_state.current_chart_type,
+                    st.session_state.current_chart_x,
+                    st.session_state.current_chart_y
+                )
+                if fig:
+                    st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
 
 else:
     # 引导页面
