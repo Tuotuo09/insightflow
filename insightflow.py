@@ -47,7 +47,6 @@ st.markdown(f"""
 <style>
     .stApp {{ background-color: {BG_GRAY}; }}
     
-    /* 卡片样式 */
     .card {{
         background-color: white;
         border-radius: 16px;
@@ -57,7 +56,6 @@ st.markdown(f"""
         border: 1px solid #E5E7EB;
     }}
     
-    /* 标题样式 */
     .title {{
         font-size: 48px;
         font-weight: 700;
@@ -67,11 +65,10 @@ st.markdown(f"""
         margin-bottom: 8px;
     }}
     
-    /* 上传区域 */
     .upload-area {{
         border: 2px dashed {PRIMARY_BLUE};
         border-radius: 16px;
-        padding: 40px;
+        padding: 30px;
         text-align: center;
         background-color: white;
         transition: all 0.3s ease;
@@ -82,7 +79,6 @@ st.markdown(f"""
         background-color: {LIGHT_BLUE};
     }}
     
-    /* 按钮样式 */
     .stButton > button {{
         background: linear-gradient(135deg, {PRIMARY_BLUE}, {DARK_BLUE});
         color: white;
@@ -92,13 +88,13 @@ st.markdown(f"""
         font-weight: 600;
         font-size: 16px;
         transition: all 0.3s ease;
+        width: 100%;
     }}
     .stButton > button:hover {{
         transform: translateY(-2px);
         box-shadow: 0 4px 12px rgba(30,136,229,0.3);
     }}
     
-    /* 输入框样式 */
     .stTextInput > div > div > input {{
         border-radius: 40px;
         border: 2px solid #E5E7EB;
@@ -110,7 +106,6 @@ st.markdown(f"""
         box-shadow: 0 0 0 2px rgba(30,136,229,0.1);
     }}
     
-    /* AI 卡片 */
     .ai-card {{
         background: linear-gradient(135deg, {LIGHT_BLUE}, white);
         border-radius: 16px;
@@ -119,18 +114,14 @@ st.markdown(f"""
         margin-top: 20px;
     }}
     
-    /* 指标行 */
-    .stats-row {{
-        display: flex;
-        gap: 20px;
-        flex-wrap: wrap;
-        margin-bottom: 16px;
-    }}
     .stat-item {{
         background: {LIGHT_BLUE};
         border-radius: 12px;
         padding: 8px 16px;
         font-size: 14px;
+        display: inline-block;
+        margin-right: 12px;
+        margin-bottom: 8px;
     }}
     .stat-value {{
         font-weight: 700;
@@ -172,7 +163,7 @@ if 'api_checked' not in st.session_state:
     st.session_state.api_checked = False
 
 # ==================== DeepSeek API 配置 ====================
-DEEPSEEK_API_KEY = "sk-52bcbd3d232945828250c3a1408598ff"  # 请替换为你的 DeepSeek API Key
+DEEPSEEK_API_KEY = "sk-52bcbd3d232945828250c3a1408598ff"
 
 def check_api_availability():
     """检查 API 是否可用"""
@@ -282,9 +273,13 @@ def ai_analyze(query, df):
 - 关键统计：{json.dumps(summary, ensure_ascii=False)}
 - 示例数据（前10行）：{json.dumps(sample_data, ensure_ascii=False)}
 
-请分析用户问题，并返回一个**纯 JSON 对象**。
+【重要规则】
+1. 如果用户问「分布」「占比」，用 pie 图，chart_x 应该是分类字段（优先选择：部门、岗位、地区、状态），chart_y 用 "数量" 或 "人数"
+2. 如果用户问「前几名」「排名」「最高」，用 bar 图
+3. 如果用户问「趋势」「变化」，用 line 图
+4. 如果用户问「平均」「建议」，chart_type 用 none
 
-根据用户问题，判断应该做什么分析，然后返回 JSON。
+请分析用户问题，并返回一个**纯 JSON 对象**。
 
 JSON 格式：
 {{
@@ -301,17 +296,15 @@ JSON 格式：
     
     response = call_deepseek(prompt)
     
-    # 尝试多种方式解析 JSON
     if response:
-        # 方式1：直接解析
+        # 尝试多种方式解析 JSON
         try:
             result = json.loads(response)
             return result
         except:
             pass
         
-        # 方式2：提取 {} 内的内容
-        import re
+        # 提取 {} 内的内容
         json_match = re.search(r'\{[^{}]*\}', response, re.DOTALL)
         if json_match:
             try:
@@ -320,7 +313,7 @@ JSON 格式：
             except:
                 pass
         
-        # 方式3：提取更大的 JSON
+        # 提取更大的 JSON
         json_match_large = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', response, re.DOTALL)
         if json_match_large:
             try:
@@ -329,31 +322,13 @@ JSON 格式：
             except:
                 pass
         
-        # 方式4：手动构建默认结果（根据数据生成有意义的建议）
-        default_insight = f"数据共{len(df)}条记录，{len(df.columns)}个字段"
-        default_recommendation = "试试问：「部门分布」「薪资前10」「平均年龄」"
-        default_fun_fact = f"数值列有{len(real_numeric_cols)}个，文本列有{len(text_cols)}个"
-        default_summary = "分析完成"
-        
-        # 尝试从用户问题中提取关键词生成更智能的默认结果
-        query_lower = query.lower()
-        if "分布" in query_lower and text_cols:
-            default_insight = f"可查看{text_cols[0]}的分布情况"
-            default_recommendation = f"建议分析{text_cols[0]}的构成比例"
-        elif "前" in query_lower and real_numeric_cols:
-            default_insight = f"可查看{real_numeric_cols[0]}的排名"
-            default_recommendation = f"建议关注{real_numeric_cols[0]}较高的记录"
-        elif "平均" in query_lower and real_numeric_cols:
-            avg_val = df[real_numeric_cols[0]].mean()
-            default_insight = f"平均{real_numeric_cols[0]}为{avg_val:.0f}"
-            default_recommendation = f"建议对比各部门的{real_numeric_cols[0]}水平"
-        
+        # 默认结果
         return {
             "chart_type": "none",
-            "insight": default_insight,
-            "recommendation": default_recommendation,
-            "fun_fact": default_fun_fact,
-            "summary": default_summary
+            "insight": f"数据共{len(df)}条记录，{len(df.columns)}个字段",
+            "recommendation": "试试问：「部门分布」「薪资前10」「平均年龄」",
+            "fun_fact": f"数值列有{len(real_numeric_cols)}个，文本列有{len(text_cols)}个",
+            "summary": "分析完成"
         }
     
     return None
@@ -428,8 +403,18 @@ def generate_dynamic_examples(df):
     id_keywords = ['id', '编号', '工号', '序号', '员工id']
     real_numeric_cols = [c for c in numeric_cols if not any(kw in c.lower() for kw in id_keywords)]
     
-    if text_cols:
-        examples.append(f"「{text_cols[0]}分布」")
+    # 优先选择有意义的分类字段
+    priority_cols = ['部门', '岗位', '地区', '城市', '状态', '等级']
+    selected_text = None
+    for pc in priority_cols:
+        if pc in text_cols:
+            selected_text = pc
+            break
+    if not selected_text and text_cols:
+        selected_text = text_cols[0]
+    
+    if selected_text:
+        examples.append(f"「{selected_text}分布」")
     
     if real_numeric_cols:
         examples.append(f"「{real_numeric_cols[0]}前10」")
@@ -440,9 +425,16 @@ def generate_dynamic_examples(df):
     
     return " · ".join(examples[:4])
 
-# ==================== 上传区域 ====================
+# ==================== 上传区域（简化版）====================
+st.markdown("""
+<div class="upload-area" style="text-align: center;">
+    <div style="font-size: 40px; margin-bottom: 12px;">📁</div>
+    <div style="font-size: 18px; font-weight: 500;">点击上传 Excel 或 CSV</div>
+</div>
+""", unsafe_allow_html=True)
+
 uploaded_file = st.file_uploader(
-    "点击上传 Excel 或 CSV",
+    "",
     type=['xlsx', 'xls', 'csv'],
     label_visibility="collapsed"
 )
@@ -459,13 +451,14 @@ if uploaded_file:
         numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
         text_cols = df.select_dtypes(include=['object']).columns.tolist()
         
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.markdown(f'<div class="stat-item">📊 总行数：<span class="stat-value">{len(df)}</span></div>', unsafe_allow_html=True)
-        with col2:
-            st.markdown(f'<div class="stat-item">📋 总列数：<span class="stat-value">{len(df.columns)}</span></div>', unsafe_allow_html=True)
-        with col3:
-            st.markdown(f'<div class="stat-item">🔢 数值列：<span class="stat-value">{len(numeric_cols)}</span></div>', unsafe_allow_html=True)
+        st.markdown(f"""
+        <div>
+            <span class="stat-item">📊 总行数：<span class="stat-value">{len(df)}</span></span>
+            <span class="stat-item">📋 总列数：<span class="stat-value">{len(df.columns)}</span></span>
+            <span class="stat-item">🔢 数值列：<span class="stat-value">{len(numeric_cols)}</span></span>
+            <span class="stat-item">📝 文本列：<span class="stat-value">{len(text_cols)}</span></span>
+        </div>
+        """, unsafe_allow_html=True)
         
         st.write("**字段列表**")
         st.dataframe(df.dtypes.reset_index().rename(columns={'index': '字段', 0: '类型'}), use_container_width=True)
@@ -475,10 +468,12 @@ if uploaded_file:
     # 问答区域
     st.markdown("---")
     
-    col_input, col_btn = st.columns([4, 1])
-    with col_input:
-        query = st.text_input("", placeholder="例如：哪个部门人最多？｜薪资合理吗？｜给我一些建议", label_visibility="collapsed")
-    with col_btn:
+    # 输入框
+    query = st.text_input("", placeholder="例如：哪个部门人最多？｜薪资合理吗？｜给我一些建议", label_visibility="collapsed")
+    
+    # 分析按钮（放在输入框下面）
+    col_btn1, col_btn2, col_btn3 = st.columns([1, 2, 1])
+    with col_btn2:
         analyze_btn = st.button("开始分析", type="primary", use_container_width=True)
     
     # 动态示例
@@ -537,8 +532,15 @@ if uploaded_file:
                             if fig:
                                 st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
                         elif text_cols:
-                            default_data = df[text_cols[0]].value_counts().head(5)
-                            fig = px.pie(values=default_data.values, names=default_data.index, title=f"{text_cols[0]}分布")
+                            # 优先选择有意义的分类字段
+                            priority_cols = ['部门', '岗位', '地区', '状态']
+                            chart_col = text_cols[0]
+                            for pc in priority_cols:
+                                if pc in text_cols:
+                                    chart_col = pc
+                                    break
+                            default_data = df[chart_col].value_counts().head(5)
+                            fig = px.pie(values=default_data.values, names=default_data.index, title=f"{chart_col}分布")
                             fig.update_traces(marker=dict(colors=px.colors.sequential.Blues_r), hole=0.3)
                             fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
                             st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
@@ -567,13 +569,6 @@ if uploaded_file:
 else:
     # 引导页面
     st.markdown("""
-    <div class="upload-area" style="text-align: center;">
-        <div style="font-size: 48px; margin-bottom: 16px;">📁</div>
-        <div style="font-size: 20px; font-weight: 500; margin-bottom: 8px;">点击上传 Excel 或 CSV</div>
-        <div style="font-size: 14px; color: #666;">支持 .xlsx, .xls, .csv 格式</div>
-        <div style="font-size: 12px; color: #888; margin-top: 16px;">✨ 数据只在你的电脑处理，不上传任何服务器 ✨</div>
-    </div>
-    
     <div style="margin-top: 32px;">
         <div class="card" style="text-align: center;">
             <div style="font-size: 20px; margin-bottom: 16px;">🎯 能做什么</div>
