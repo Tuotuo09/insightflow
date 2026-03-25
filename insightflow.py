@@ -1,8 +1,7 @@
 """
-InsightFlow - 智能数据决策助手
+InsightFlow - 智能数据决策助手（修复版）
 作者：Tuotuo09
-功能：上传任意 Excel，自然语言提问，AI 智能分析 + 智能图表 + 决策建议 + 分页显示
-支持：人事、销售、考勤、财务等任何表格数据
+核心改进：工具先准确计算，AI 只负责解读，确保数据准确性
 """
 
 import streamlit as st
@@ -39,8 +38,6 @@ LOADING_MESSAGES = [
     "📊 数据加工中...",
     "🧠 大脑飞速运转中...",
     "⚡ 即将揭晓答案...",
-    "🎲 让我算一算...",
-    "💡 有灵感了..."
 ]
 
 # ==================== 会话状态初始化 ====================
@@ -48,33 +45,25 @@ if 'api_available' not in st.session_state:
     st.session_state.api_available = None
 if 'api_checked' not in st.session_state:
     st.session_state.api_checked = False
-if 'filtered_df' not in st.session_state:
-    st.session_state.filtered_df = None
-if 'filter_name' not in st.session_state:
-    st.session_state.filter_name = None
-if 'current_result_df' not in st.session_state:
-    st.session_state.current_result_df = None
-if 'current_chart_type' not in st.session_state:
-    st.session_state.current_chart_type = None
-if 'current_chart_x' not in st.session_state:
-    st.session_state.current_chart_x = None
-if 'current_chart_y' not in st.session_state:
-    st.session_state.current_chart_y = None
-if 'current_insight' not in st.session_state:
-    st.session_state.current_insight = None
-if 'current_recommendation' not in st.session_state:
-    st.session_state.current_recommendation = None
-if 'current_fun_fact' not in st.session_state:
-    st.session_state.current_fun_fact = None
-if 'current_summary' not in st.session_state:
-    st.session_state.current_summary = None
 if 'has_result' not in st.session_state:
     st.session_state.has_result = False
 if 'current_df' not in st.session_state:
     st.session_state.current_df = None
+if 'channel_stats' not in st.session_state:
+    st.session_state.channel_stats = None
+if 'city_stats' not in st.session_state:
+    st.session_state.city_stats = None
+if 'type_stats' not in st.session_state:
+    st.session_state.type_stats = None
+if 'ai_response' not in st.session_state:
+    st.session_state.ai_response = None
 
 # ==================== DeepSeek API 配置 ====================
+# 方式1：直接填入
 DEEPSEEK_API_KEY = "sk-52bcbd3d232945828250c3a1408598ff"
+# 方式2：从环境变量读取（部署时用）
+# import os
+# DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 
 def check_api_availability():
     """检查 API 是否可用"""
@@ -112,11 +101,11 @@ def call_deepseek(prompt):
     data = {
         "model": "deepseek-chat",
         "messages": [
-            {"role": "system", "content": "你是一个专业的数据分析专家。你需要理解用户的数据分析需求，并给出深刻的洞察和可执行的建议。回答要简洁、专业、有决策价值。"},
+            {"role": "system", "content": "你是一个专业的数据分析专家。基于提供的准确数据，给出深刻的洞察和可执行的建议。回答要简洁、专业、有决策价值。"},
             {"role": "user", "content": prompt}
         ],
         "temperature": 0.7,
-        "max_tokens": 2000
+        "max_tokens": 1500
     }
     
     try:
@@ -134,11 +123,9 @@ def call_deepseek(prompt):
 
 def clean_dataframe(df):
     """清洗数据框：过滤 Unnamed 列，处理空值"""
-    # 过滤掉 Unnamed 开头的列
     valid_columns = [c for c in df.columns if not str(c).startswith('Unnamed')]
     df = df[valid_columns]
     
-    # 处理空值：数值列填0，文本列填空字符串
     for col in df.columns:
         if pd.api.types.is_numeric_dtype(df[col]):
             df[col] = df[col].fillna(0)
@@ -147,287 +134,211 @@ def clean_dataframe(df):
     
     return df
 
-def ai_analyze(query, filtered_df, original_df):
-    """AI 模式：智能分析 + 智能图表（基于筛选后的数据）"""
-    df = filtered_df if filtered_df is not None else original_df
+def precompute_channel_stats(df):
+    """【工具准确计算】渠道付费统计"""
     
-    numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-    text_cols = df.select_dtypes(include=['object']).columns.tolist()
+    # 自动识别列名
+    channel_col = None
+    pay_col = None
+    amount_col = None
     
-    # 排除 ID 类字段和 Unnamed 列
-    id_keywords = ['id', '编号', '工号', '序号', '员工id', '用户id']
-    real_numeric_cols = [c for c in numeric_cols if not any(kw in c.lower() for kw in id_keywords)]
-    if not real_numeric_cols:
-        real_numeric_cols = numeric_cols
+    for col in df.columns:
+        if "渠道" in col or "来源" in col:
+            channel_col = col
+        if "付费" in col and "金额" in col:
+            amount_col = col
+        if "付费" in col and "是否" in col:
+            pay_col = col
     
-    stats = f"数据共有{len(df)}行，{len(df.columns)}列。"
-    stats += f"数值列：{', '.join(real_numeric_cols[:5])}。"
-    stats += f"文本列：{', '.join(text_cols[:5])}。"
+    if not channel_col:
+        return None
     
-    # 统计摘要
-    summary_stats = {}
-    for col in real_numeric_cols[:3]:
-        summary_stats[col] = {
-            "平均值": float(round(df[col].mean(), 2)),
-            "最大值": float(df[col].max()),
-            "最小值": float(df[col].min())
-        }
+    stats = []
+    for channel in df[channel_col].unique():
+        channel_df = df[df[channel_col] == channel]
+        total_users = len(channel_df)
+        
+        # 付费用户数
+        if pay_col:
+            pay_users = len(channel_df[channel_df[pay_col] == "是"])
+        else:
+            pay_users = 0
+        
+        pay_rate = round(pay_users / total_users * 100, 1) if total_users > 0 else 0
+        
+        # 付费金额
+        if amount_col:
+            total_amount = channel_df[amount_col].sum()
+            avg_amount = round(total_amount / pay_users, 1) if pay_users > 0 else 0
+        else:
+            total_amount = 0
+            avg_amount = 0
+        
+        stats.append({
+            "渠道": channel,
+            "用户数": total_users,
+            "付费用户数": pay_users,
+            "付费率": f"{pay_rate}%",
+            "总付费金额": round(total_amount, 0),
+            "人均付费": avg_amount
+        })
     
-    for col in text_cols[:3]:
-        top_values = df[col].value_counts().head(5).to_dict()
-        top_values = {str(k): int(v) for k, v in top_values.items()}
-        summary_stats[col] = {"前5个值": top_values}
+    result_df = pd.DataFrame(stats)
+    result_df = result_df.sort_values("总付费金额", ascending=False)
     
-    # 示例数据
-    sample_data = []
-    for _, row in df.head(10).iterrows():
-        row_dict = {}
-        for col in df.columns:
-            val = row[col]
-            if pd.isna(val):
-                row_dict[col] = None
-            elif isinstance(val, (np.integer, np.floating)):
-                row_dict[col] = float(val)
-            elif isinstance(val, pd.Timestamp):
-                row_dict[col] = val.strftime('%Y-%m-%d')
-            else:
-                row_dict[col] = str(val)
-        sample_data.append(row_dict)
-    
-    prompt = f"""用户问题：{query}
+    return result_df
 
-当前分析的数据共有 {len(df)} 条记录。
-数据概况：
-- {stats}
-- 关键统计：{json.dumps(summary_stats, ensure_ascii=False)}
-- 示例数据（前10行）：{json.dumps(sample_data, ensure_ascii=False)}
+def precompute_demographic_stats(df):
+    """【工具准确计算】用户画像统计"""
+    
+    # 城市等级统计
+    city_col = None
+    for col in df.columns:
+        if "城市" in col:
+            city_col = col
+            break
+    
+    city_stats = None
+    if city_col:
+        city_data = []
+        for city in df[city_col].unique():
+            city_df = df[df[city_col] == city]
+            pay_users = len(city_df[city_df["是否付费"] == "是"]) if "是否付费" in df.columns else 0
+            avg_amount = round(city_df["累计付费金额"].mean(), 1) if "累计付费金额" in df.columns else 0
+            city_data.append({
+                "城市等级": city,
+                "用户数": len(city_df),
+                "付费用户数": pay_users,
+                "人均付费": avg_amount
+            })
+        city_stats = pd.DataFrame(city_data).sort_values("用户数", ascending=False)
+    
+    # 用户类型统计
+    type_col = None
+    for col in df.columns:
+        if "用户类型" in col:
+            type_col = col
+            break
+    
+    type_stats = None
+    if type_col:
+        type_data = []
+        for utype in df[type_col].unique():
+            type_df = df[df[type_col] == utype]
+            pay_users = len(type_df[type_df["是否付费"] == "是"]) if "是否付费" in df.columns else 0
+            avg_amount = round(type_df["累计付费金额"].mean(), 1) if "累计付费金额" in df.columns else 0
+            type_data.append({
+                "用户类型": utype,
+                "用户数": len(type_df),
+                "付费用户数": pay_users,
+                "人均付费": avg_amount
+            })
+        type_stats = pd.DataFrame(type_data).sort_values("用户数", ascending=False)
+    
+    return city_stats, type_stats
 
-请基于当前数据进行分析，并返回一个**纯 JSON 对象**。
+def precompute_retention_stats(df):
+    """【工具准确计算】留存状态统计"""
+    
+    retention_col = None
+    for col in df.columns:
+        if "留存" in col:
+            retention_col = col
+            break
+    
+    if not retention_col:
+        return None
+    
+    retention_data = []
+    for status in df[retention_col].unique():
+        status_df = df[df[retention_col] == status]
+        pay_users = len(status_df[status_df["是否付费"] == "是"]) if "是否付费" in df.columns else 0
+        retention_data.append({
+            "留存状态": status,
+            "用户数": len(status_df),
+            "付费用户数": pay_users,
+            "付费率": round(pay_users / len(status_df) * 100, 1)
+        })
+    
+    return pd.DataFrame(retention_data).sort_values("用户数", ascending=False)
 
-【分析要求】
-1. summary: 多维度分析，包含：规模、数值特征、分布情况、关键发现，用简洁的分点形式
-2. insight: 深度洞察，包含问题诊断和风险识别
-3. recommendation: 可执行的行动建议，分优先级（高/中/低）
-4. fun_fact: 一个有趣的数据发现
+def ai_analyze_with_precomputed(query, df):
+    """AI 解读模式：工具先计算，AI 只解读"""
+    
+    # 1. 工具准确计算所有统计
+    channel_stats = precompute_channel_stats(df)
+    city_stats, type_stats = precompute_demographic_stats(df)
+    retention_stats = precompute_retention_stats(df)
+    
+    # 2. 整体统计
+    total_users = len(df)
+    pay_users = len(df[df["是否付费"] == "是"]) if "是否付费" in df.columns else 0
+    total_amount = df["累计付费金额"].sum() if "累计付费金额" in df.columns else 0
+    
+    # 3. 构建统计摘要（只发送计算结果给 AI）
+    summary_text = "📊 【渠道付费分析】\n"
+    if channel_stats is not None:
+        for _, row in channel_stats.iterrows():
+            summary_text += f"  • {row['渠道']}: {row['用户数']}人, 付费{row['付费用户数']}人, 付费率{row['付费率']}, 总金额{row['总付费金额']:.0f}元, 人均{row['人均付费']}元\n"
+    else:
+        summary_text += "  • 无渠道数据\n"
+    
+    summary_text += "\n🏙️ 【城市等级分析】\n"
+    if city_stats is not None:
+        for _, row in city_stats.iterrows():
+            summary_text += f"  • {row['城市等级']}: {row['用户数']}人, 付费{row['付费用户数']}人, 人均{row['人均付费']}元\n"
+    else:
+        summary_text += "  • 无城市数据\n"
+    
+    summary_text += "\n👥 【用户类型分析】\n"
+    if type_stats is not None:
+        for _, row in type_stats.iterrows():
+            summary_text += f"  • {row['用户类型']}: {row['用户数']}人, 付费{row['付费用户数']}人, 人均{row['人均付费']}元\n"
+    else:
+        summary_text += "  • 无用户类型数据\n"
+    
+    summary_text += "\n💾 【留存状态分析】\n"
+    if retention_stats is not None:
+        for _, row in retention_stats.iterrows():
+            summary_text += f"  • {row['留存状态']}: {row['用户数']}人, 付费{row['付费用户数']}人, 付费率{row['付费率']}%\n"
+    else:
+        summary_text += "  • 无留存数据\n"
+    
+    summary_text += f"\n📈 【整体情况】\n"
+    summary_text += f"  • 总用户数: {total_users}人\n"
+    summary_text += f"  • 付费用户数: {pay_users}人\n"
+    summary_text += f"  • 付费率: {pay_users/total_users*100:.1f}%\n"
+    summary_text += f"  • 总付费金额: {total_amount:.0f}元\n"
+    summary_text += f"  • 人均付费: {total_amount/total_users:.1f}元\n"
+    if pay_users > 0:
+        summary_text += f"  • 付费用户人均: {total_amount/pay_users:.1f}元\n"
+    
+    # 4. 发送给 AI 解读
+    prompt = f"""你是数据分析专家。基于以下**准确计算**的数据，回答用户问题：{query}
 
-【图表选择规则】
-- 如果用户问「分布」「占比」，用 pie 图，chart_x 用分类字段，chart_y 用计数字段
-- 如果用户问「前几名」「排名」「最高」，用 bar 图
-- 如果用户问「趋势」「变化」，用 line 图
-- 其他情况用 none
+{summary_text}
 
-JSON 格式：
-{{
-    "chart_type": "pie或bar或line或none",
-    "chart_x": "X轴字段名",
-    "chart_y": "Y轴字段名",
-    "summary": "多维度分析结果",
-    "insight": "深度洞察",
-    "recommendation": "行动建议（分优先级）",
-    "fun_fact": "趣味事实"
-}}
+请按以下格式输出：
+【洞察】：（2-3点，基于数据发现的核心问题）
+【决策建议】：（分优先级：高/中/低，具体可执行）
+【趣味发现】：（一个有趣的数据洞察）
 
-只返回 JSON 对象，不要有任何其他文字。"""
+注意：数据已经计算准确，请基于数据解读。"""
     
     response = call_deepseek(prompt)
     
-    if response:
-        try:
-            result = json.loads(response)
-            return result
-        except:
-            pass
-        
-        json_match = re.search(r'\{[^{}]*\}', response, re.DOTALL)
-        if json_match:
-            try:
-                result = json.loads(json_match.group())
-                return result
-            except:
-                pass
-        
-        json_match_large = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', response, re.DOTALL)
-        if json_match_large:
-            try:
-                result = json.loads(json_match_large.group())
-                return result
-            except:
-                pass
-        
-        return {
-            "chart_type": "none",
-            "summary": f"📊 数据共{len(df)}条记录，{len(df.columns)}个字段",
-            "insight": "数据整体正常，建议进一步探索",
-            "recommendation": "1. 高：尝试问具体问题如「部门分布」「薪资前10」",
-            "fun_fact": f"数值列有{len(real_numeric_cols)}个"
-        }
-    
-    return None
-
-def create_chart(df, chart_type, x_col, y_col):
-    """创建时尚科技感图表"""
-    if chart_type == "none" or df is None or len(df) == 0:
-        return None
-    
-    try:
-        if chart_type == "pie" and x_col and y_col:
-            fig = px.pie(df, names=x_col, values=y_col, title=f"{x_col}分布")
-            fig.update_traces(
-                marker=dict(colors=px.colors.sequential.Blues_r),
-                textinfo='percent+label',
-                hole=0.3
-            )
-            fig.update_layout(
-                title_font_size=14,
-                title_font_color="#1E88E5",
-                paper_bgcolor='rgba(0,0,0,0)',
-                plot_bgcolor='rgba(0,0,0,0)',
-                font=dict(family="PingFang SC, Microsoft YaHei", size=12)
-            )
-            return fig
-            
-        elif chart_type == "bar" and x_col and y_col:
-            fig = px.bar(df, x=x_col, y=y_col, title=f"{y_col}排行", color=y_col)
-            fig.update_traces(
-                marker_color=[PRIMARY_BLUE, DARK_BLUE, "#3A6EA5", "#5A8EC5", "#7AAEE5"],
-                textposition='outside'
-            )
-            fig.update_layout(
-                title_font_size=14,
-                title_font_color=PRIMARY_BLUE,
-                paper_bgcolor='rgba(0,0,0,0)',
-                plot_bgcolor='rgba(0,0,0,0)',
-                font=dict(family="PingFang SC, Microsoft YaHei", size=12)
-            )
-            return fig
-            
-        elif chart_type == "line" and x_col and y_col:
-            fig = px.line(df, x=x_col, y=y_col, title=f"{y_col}趋势", markers=True)
-            fig.update_traces(line_color=PRIMARY_BLUE, marker_color=DARK_BLUE, marker_size=8)
-            fig.update_layout(
-                title_font_size=14,
-                title_font_color=PRIMARY_BLUE,
-                paper_bgcolor='rgba(0,0,0,0)',
-                plot_bgcolor='rgba(0,0,0,0)',
-                font=dict(family="PingFang SC, Microsoft YaHei", size=12)
-            )
-            return fig
-            
-        elif len(df.columns) >= 2:
-            fig = px.bar(df, x=df.columns[0], y=df.columns[1], title="数据分布")
-            fig.update_traces(marker_color=PRIMARY_BLUE)
-            fig.update_layout(
-                paper_bgcolor='rgba(0,0,0,0)',
-                plot_bgcolor='rgba(0,0,0,0)'
-            )
-            return fig
-    except Exception as e:
-        return None
-    return None
-
-def generate_dynamic_examples(df):
-    """根据数据动态生成示例问题"""
-    examples = []
-    text_cols = df.select_dtypes(include=['object']).columns.tolist()
-    numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-    
-    id_keywords = ['id', '编号', '工号', '序号', '员工id', '用户id']
-    real_numeric_cols = [c for c in numeric_cols if not any(kw in c.lower() for kw in id_keywords)]
-    
-    # 优先选择有意义的分类字段
-    priority_cols = ['部门', '岗位', '产品', '地区', '城市', '状态', '等级', '类型', '渠道', '姓名']
-    selected_text = None
-    for pc in priority_cols:
-        if pc in text_cols:
-            selected_text = pc
-            break
-    if not selected_text and text_cols:
-        selected_text = text_cols[0]
-    
-    if selected_text:
-        examples.append(f"「{selected_text}分布」")
-        # 获取该字段的前2个常见值作为筛选示例
-        top_values = df[selected_text].value_counts().head(2).index.tolist()
-        for val in top_values:
-            if val and str(val).strip() and str(val) != 'nan':
-                examples.append(f"「{val}」")
-    
-    if real_numeric_cols:
-        examples.append(f"「{real_numeric_cols[0]}前10」")
-        examples.append(f"「平均{real_numeric_cols[0]}」")
-    
-    # 去重并限制数量
-    seen = set()
-    unique_examples = []
-    for ex in examples:
-        if ex not in seen:
-            seen.add(ex)
-            unique_examples.append(ex)
-    
-    return " · ".join(unique_examples[:5])
-
-def extract_filter_from_query(query, df):
-    """从用户问题中提取筛选条件"""
-    text_cols = df.select_dtypes(include=['object']).columns.tolist()
-    
-    for col in text_cols:
-        unique_vals = df[col].dropna().unique().tolist()
-        for val in unique_vals:
-            if val and str(val) in query:
-                return col, str(val)
-    return None, None
-
-def display_paginated_table(df, title="数据列表", rows_per_page=10, key_prefix="table"):
-    """分页显示表格"""
-    if df is None or len(df) == 0:
-        st.markdown(f"**{title}**（暂无数据）")
-        return
-    
-    total_rows = len(df)
-    total_pages = (total_rows + rows_per_page - 1) // rows_per_page
-    
-    page_key = f"page_{key_prefix}"
-    if page_key not in st.session_state:
-        st.session_state[page_key] = 1
-    
-    current_page = st.session_state[page_key]
-    if current_page < 1:
-        current_page = 1
-        st.session_state[page_key] = 1
-    if current_page > total_pages:
-        current_page = total_pages
-        st.session_state[page_key] = total_pages
-    
-    start_idx = (current_page - 1) * rows_per_page
-    end_idx = min(start_idx + rows_per_page, total_rows)
-    
-    st.markdown(f"**{title}**（共 {total_rows} 条记录，第 {current_page} / {total_pages} 页）")
-    
-    page_df = df.iloc[start_idx:end_idx]
-    st.dataframe(page_df, use_container_width=True)
-    
-    if total_pages > 1:
-        col1, col2, col3, col4, col5 = st.columns([1, 1, 2, 1, 1])
-        with col1:
-            if st.button("⏮️ 首页", key=f"first_{key_prefix}"):
-                st.session_state[page_key] = 1
-                st.rerun()
-        with col2:
-            if st.button("◀ 上一页", key=f"prev_{key_prefix}"):
-                if st.session_state[page_key] > 1:
-                    st.session_state[page_key] -= 1
-                    st.rerun()
-        with col3:
-            st.markdown(f"<div style='text-align: center; padding-top: 8px; color: {PRIMARY_BLUE};'>第 {current_page} / {total_pages} 页</div>", unsafe_allow_html=True)
-        with col4:
-            if st.button("下一页 ▶", key=f"next_{key_prefix}"):
-                if st.session_state[page_key] < total_pages:
-                    st.session_state[page_key] += 1
-                    st.rerun()
-        with col5:
-            if st.button("末页 ⏭️", key=f"last_{key_prefix}"):
-                st.session_state[page_key] = total_pages
-                st.rerun()
+    return {
+        "summary": summary_text,
+        "response": response,
+        "channel_stats": channel_stats,
+        "city_stats": city_stats,
+        "type_stats": type_stats,
+        "retention_stats": retention_stats,
+        "total_users": total_users,
+        "pay_users": pay_users,
+        "pay_rate": pay_users/total_users*100 if total_users > 0 else 0,
+        "total_amount": total_amount
+    }
 
 # ==================== 自定义 CSS ====================
 st.markdown(f"""
@@ -461,7 +372,6 @@ st.markdown(f"""
         font-weight: 600;
         font-size: 14px;
         transition: all 0.3s ease;
-        width: auto;
     }}
     .stButton > button:hover {{
         transform: translateY(-2px);
@@ -556,10 +466,10 @@ st.markdown("""
 <div style="text-align: center; margin-bottom: 32px;">
     <h1 class="title">✨ InsightFlow · 智能数据决策助手</h1>
     <p style="font-size: 18px; color: #666; margin-top: -8px;">
-        🤖 Built by Tuotuo09 · AI 数据智能平台
+        🤖 Built by Tuotuo09 · 准确计算 · AI 智能解读
     </p>
     <p style="font-size: 14px; color: #888;">
-        💡 随便问 · AI 帮你分析 · 智能图表 · 决策建议
+        💡 随便问 · 工具准确计算 · AI 给出洞察和建议
     </p>
 </div>
 """, unsafe_allow_html=True)
@@ -574,19 +484,6 @@ with col2:
     )
 
 if uploaded_file:
-    # 显示文件信息
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        st.markdown(f"📄 **{uploaded_file.name}** ({(uploaded_file.size / 1024):.1f} KB)")
-    with col2:
-        if st.button("🗑️ 删除", key="delete_btn"):
-            # 清空所有会话状态
-            st.session_state.filtered_df = None
-            st.session_state.has_result = False
-            st.session_state.current_df = None
-            # 强制刷新页面
-            st.rerun()
-    
     # 加载数据并清洗
     if uploaded_file.name.endswith('.csv'):
         df = pd.read_csv(uploaded_file)
@@ -618,172 +515,236 @@ if uploaded_file:
     # 问答区域
     st.markdown("---")
     
-    query = st.text_input("", placeholder="例如：哪个部门人最多？｜薪资合理吗？｜给我一些建议", label_visibility="collapsed")
+    query = st.text_input("", placeholder="例如：各渠道付费情况｜哪个渠道用户质量最高｜给我一些建议", label_visibility="collapsed")
     analyze_btn = st.button("🚀 开始分析", type="primary")
     
-    # 动态生成示例问题
-    examples = generate_dynamic_examples(df)
-    st.caption(f"💡 试试这些：{examples}")
+    # 动态示例问题
+    st.caption("💡 试试这些：各渠道付费情况 · 城市等级分析 · 用户类型对比 · 留存状态分析")
     
     # ==================== 分析逻辑 ====================
     if analyze_btn and query:
         api_ok = check_api_availability()
         
         if api_ok:
-            st.markdown('<div><span class="mode-badge-ai">🤖 AI 智能模式</span></div>', unsafe_allow_html=True)
-            
-            # 提取筛选条件
-            filter_col, filter_val = extract_filter_from_query(query, df)
-            
-            if filter_col and filter_val:
-                display_df = df[df[filter_col] == filter_val]
-                filter_name = filter_val
-            else:
-                display_df = df
-                filter_name = None
+            st.markdown('<div><span class="mode-badge-ai">🤖 AI 智能模式 · 工具准确计算 + AI 智能解读</span></div>', unsafe_allow_html=True)
             
             loading_msg = random.choice(LOADING_MESSAGES)
             with st.spinner(loading_msg):
-                ai_result = ai_analyze(query, display_df, df)
+                result = ai_analyze_with_precomputed(query, df)
                 
-                if ai_result:
-                    chart_type = ai_result.get("chart_type", "none")
-                    chart_x = ai_result.get("chart_x", None)
-                    chart_y = ai_result.get("chart_y", None)
-                    summary_text = ai_result.get("summary", "")
-                    insight = ai_result.get("insight", "")
-                    recommendation = ai_result.get("recommendation", "")
-                    fun_fact = ai_result.get("fun_fact", "")
-                    
-                    # 准备图表数据（增加异常保护）
-                    result_df = None
-                    if chart_type != "none" and chart_x and chart_y:
-                        if chart_x in display_df.columns and chart_y in display_df.columns:
-                            if pd.api.types.is_numeric_dtype(display_df[chart_y]):
-                                try:
-                                    if chart_type == "pie":
-                                        result_df = display_df.groupby(chart_x)[chart_y].sum().reset_index()
-                                    elif chart_type in ["bar", "line"]:
-                                        result_df = display_df.groupby(chart_x)[chart_y].sum().reset_index()
-                                        result_df = result_df.sort_values(chart_y, ascending=False).head(10)
-                                except Exception as e:
-                                    result_df = None
-                    
-                    # 保存所有结果到 session_state
-                    st.session_state.filtered_df = display_df
-                    st.session_state.filter_name = filter_name
-                    st.session_state.current_result_df = result_df
-                    st.session_state.current_chart_type = chart_type
-                    st.session_state.current_chart_x = chart_x
-                    st.session_state.current_chart_y = chart_y
-                    st.session_state.current_summary = summary_text
-                    st.session_state.current_insight = insight
-                    st.session_state.current_recommendation = recommendation
-                    st.session_state.current_fun_fact = fun_fact
+                if result:
+                    # 保存到 session_state
                     st.session_state.has_result = True
+                    st.session_state.channel_stats = result["channel_stats"]
+                    st.session_state.city_stats = result["city_stats"]
+                    st.session_state.type_stats = result["type_stats"]
+                    st.session_state.retention_stats = result["retention_stats"]
+                    st.session_state.ai_response = result["response"]
+                    st.session_state.total_users = result["total_users"]
+                    st.session_state.pay_users = result["pay_users"]
+                    st.session_state.pay_rate = result["pay_rate"]
+                    st.session_state.total_amount = result["total_amount"]
                     
-                    # 重置分页
-                    page_key = "page_table"
-                    if page_key in st.session_state:
+                    # 显示整体指标卡片
+                    st.markdown("---")
+                    st.markdown("### 📈 整体指标")
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        st.metric("总用户数", f"{result['total_users']}")
+                    with col2:
+                        st.metric("付费用户数", f"{result['pay_users']}")
+                    with col3:
+                        st.metric("付费率", f"{result['pay_rate']:.1f}%")
+                    with col4:
+                        st.metric("总付费金额", f"{result['total_amount']:.0f}元")
+                    
+                    # 显示渠道统计表格
+                    if result["channel_stats"] is not None:
+                        st.markdown("### 📊 渠道付费分析")
+                        st.dataframe(result["channel_stats"], use_container_width=True)
+                    
+                    # 城市和用户类型并排
+                    col_left, col_right = st.columns(2)
+                    with col_left:
+                        if result["city_stats"] is not None:
+                            st.markdown("### 🏙️ 城市等级分析")
+                            st.dataframe(result["city_stats"], use_container_width=True)
+                    with col_right:
+                        if result["type_stats"] is not None:
+                            st.markdown("### 👥 用户类型分析")
+                            st.dataframe(result["type_stats"], use_container_width=True)
+                    
+                    # 留存状态
+                    if result["retention_stats"] is not None:
+                        st.markdown("### 💾 留存状态分析")
+                        st.dataframe(result["retention_stats"], use_container_width=True)
+                    
+                    # AI 智能洞察
+                    if result["response"]:
+                        st.markdown('<div class="ai-card">', unsafe_allow_html=True)
+                        st.markdown("### 🧠 Tuotuo's AI 智能洞察")
+                        
+                        response = result["response"]
+                        
+                        if "【洞察】" in response:
+                            insight_part = response.split("【洞察】")[1].split("【决策建议】")[0] if "【决策建议】" in response else response.split("【洞察】")[1]
+                            st.markdown(f"**🔍 洞察**\n{insight_part.strip()}")
+                        
+                        if "【决策建议】" in response:
+                            rec_part = response.split("【决策建议】")[1].split("【趣味发现】")[0] if "【趣味发现】" in response else response.split("【决策建议】")[1]
+                            st.markdown(f"\n**🎯 建议**\n{rec_part.strip()}")
+                        
+                        if "【趣味发现】" in response:
+                            fun_part = response.split("【趣味发现】")[1]
+                            st.markdown(f"\n**📌 趣味发现**\n{fun_part.strip()}")
+                        
+                        st.markdown('</div>', unsafe_allow_html=True)
+                    
+                    # 显示原始数据表格（分页）
+                    st.markdown("---")
+                    st.markdown(f"### 📋 数据明细（共 {len(df)} 条记录）")
+                    
+                    # 分页显示
+                    rows_per_page = 10
+                    total_pages = (len(df) + rows_per_page - 1) // rows_per_page
+                    
+                    page_key = "data_page"
+                    if page_key not in st.session_state:
                         st.session_state[page_key] = 1
                     
-                    # 显示结果
-                    st.markdown("---")
-                    st.markdown("### 📊 分析结果")
+                    current_page = st.session_state[page_key]
+                    start_idx = (current_page - 1) * rows_per_page
+                    end_idx = min(start_idx + rows_per_page, len(df))
                     
-                    if summary_text:
-                        st.markdown(summary_text)
+                    page_df = df.iloc[start_idx:end_idx]
+                    st.dataframe(page_df, use_container_width=True)
                     
-                    # AI 智能洞察区域
-                    st.markdown('<div class="ai-card">', unsafe_allow_html=True)
-                    st.markdown("### 🧠 Tuotuo's AI 智能洞察")
+                    # 分页控件
+                    if total_pages > 1:
+                        col1, col2, col3, col4, col5 = st.columns([1, 1, 2, 1, 1])
+                        with col1:
+                            if st.button("⏮️ 首页", key="first"):
+                                st.session_state[page_key] = 1
+                                st.rerun()
+                        with col2:
+                            if st.button("◀ 上一页", key="prev"):
+                                if st.session_state[page_key] > 1:
+                                    st.session_state[page_key] -= 1
+                                    st.rerun()
+                        with col3:
+                            st.markdown(f"<div style='text-align: center;'>第 {current_page} / {total_pages} 页</div>", unsafe_allow_html=True)
+                        with col4:
+                            if st.button("下一页 ▶", key="next"):
+                                if st.session_state[page_key] < total_pages:
+                                    st.session_state[page_key] += 1
+                                    st.rerun()
+                        with col5:
+                            if st.button("末页 ⏭️", key="last"):
+                                st.session_state[page_key] = total_pages
+                                st.rerun()
                     
-                    if insight:
-                        st.markdown(f"**🔍 洞察**\n{insight}")
-                    if recommendation:
-                        st.markdown(f"\n**🎯 建议**\n{recommendation}")
-                    if fun_fact:
-                        st.markdown(f"\n**📌 趣味发现**\n{fun_fact}")
-                    
-                    st.markdown('</div>', unsafe_allow_html=True)
-                    
-                    # 表格 + 图表（左右布局）
-                    col_left, col_right = st.columns([3, 2])
-                    
-                    with col_left:
-                        if filter_name:
-                            title = f"{filter_name}数据明细"
-                        else:
-                            title = "数据明细"
-                        display_paginated_table(display_df, title, rows_per_page=10, key_prefix="table")
-                    
-                    with col_right:
-                        if result_df is not None:
-                            fig = create_chart(result_df, chart_type, chart_x, chart_y)
-                            if fig:
-                                st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
-                        elif text_cols and chart_type != "none":
-                            priority_cols = ['部门', '岗位', '产品', '地区', '类型']
-                            chart_col = text_cols[0]
-                            for pc in priority_cols:
-                                if pc in text_cols:
-                                    chart_col = pc
-                                    break
-                            default_data = display_df[chart_col].value_counts().head(5)
-                            if len(default_data) > 0:
-                                fig = px.pie(values=default_data.values, names=default_data.index, title=f"{chart_col}分布")
-                                fig.update_traces(marker=dict(colors=px.colors.sequential.Blues_r), hole=0.3)
-                                fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
-                                st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
                 else:
                     st.warning("🤖 AI 服务繁忙，请稍后再试")
         
         else:
-            st.warning("🤖 AI 服务繁忙，请稍后再试")
+            st.warning("🤖 AI 服务暂不可用，请检查 API Key 配置")
     
     elif analyze_btn and not query:
         st.warning("💡 请输入一个问题～")
     
-    # ==================== 显示上次结果（用于翻页后保持）====================
+    # ==================== 显示上次结果（保持状态）====================
     elif st.session_state.has_result and not analyze_btn:
         st.markdown("---")
-        st.markdown("### 📊 分析结果")
+        st.markdown("### 📈 整体指标")
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("总用户数", f"{st.session_state.total_users}")
+        with col2:
+            st.metric("付费用户数", f"{st.session_state.pay_users}")
+        with col3:
+            st.metric("付费率", f"{st.session_state.pay_rate:.1f}%")
+        with col4:
+            st.metric("总付费金额", f"{st.session_state.total_amount:.0f}元")
         
-        if st.session_state.current_summary:
-            st.markdown(st.session_state.current_summary)
+        if st.session_state.channel_stats is not None:
+            st.markdown("### 📊 渠道付费分析")
+            st.dataframe(st.session_state.channel_stats, use_container_width=True)
         
-        st.markdown('<div class="ai-card">', unsafe_allow_html=True)
-        st.markdown("### 🧠 Tuotuo's AI 智能洞察")
-        
-        if st.session_state.current_insight:
-            st.markdown(f"**🔍 洞察**\n{st.session_state.current_insight}")
-        if st.session_state.current_recommendation:
-            st.markdown(f"\n**🎯 建议**\n{st.session_state.current_recommendation}")
-        if st.session_state.current_fun_fact:
-            st.markdown(f"\n**📌 趣味发现**\n{st.session_state.current_fun_fact}")
-        
-        st.markdown('</div>', unsafe_allow_html=True)
-        
-        col_left, col_right = st.columns([3, 2])
-        
+        col_left, col_right = st.columns(2)
         with col_left:
-            if st.session_state.filter_name:
-                title = f"{st.session_state.filter_name}数据明细"
-            else:
-                title = "数据明细"
-            if st.session_state.filtered_df is not None:
-                display_paginated_table(st.session_state.filtered_df, title, rows_per_page=10, key_prefix="table")
-        
+            if st.session_state.city_stats is not None:
+                st.markdown("### 🏙️ 城市等级分析")
+                st.dataframe(st.session_state.city_stats, use_container_width=True)
         with col_right:
-            if st.session_state.current_result_df is not None:
-                fig = create_chart(
-                    st.session_state.current_result_df,
-                    st.session_state.current_chart_type,
-                    st.session_state.current_chart_x,
-                    st.session_state.current_chart_y
-                )
-                if fig:
-                    st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+            if st.session_state.type_stats is not None:
+                st.markdown("### 👥 用户类型分析")
+                st.dataframe(st.session_state.type_stats, use_container_width=True)
+        
+        if st.session_state.retention_stats is not None:
+            st.markdown("### 💾 留存状态分析")
+            st.dataframe(st.session_state.retention_stats, use_container_width=True)
+        
+        if st.session_state.ai_response:
+            st.markdown('<div class="ai-card">', unsafe_allow_html=True)
+            st.markdown("### 🧠 Tuotuo's AI 智能洞察")
+            
+            response = st.session_state.ai_response
+            
+            if "【洞察】" in response:
+                insight_part = response.split("【洞察】")[1].split("【决策建议】")[0] if "【决策建议】" in response else response.split("【洞察】")[1]
+                st.markdown(f"**🔍 洞察**\n{insight_part.strip()}")
+            
+            if "【决策建议】" in response:
+                rec_part = response.split("【决策建议】")[1].split("【趣味发现】")[0] if "【趣味发现】" in response else response.split("【决策建议】")[1]
+                st.markdown(f"\n**🎯 建议**\n{rec_part.strip()}")
+            
+            if "【趣味发现】" in response:
+                fun_part = response.split("【趣味发现】")[1]
+                st.markdown(f"\n**📌 趣味发现**\n{fun_part.strip()}")
+            
+            st.markdown('</div>', unsafe_allow_html=True)
+        
+        # 显示原始数据
+        st.markdown("---")
+        st.markdown(f"### 📋 数据明细（共 {len(st.session_state.current_df)} 条记录）")
+        
+        df = st.session_state.current_df
+        rows_per_page = 10
+        total_pages = (len(df) + rows_per_page - 1) // rows_per_page
+        
+        page_key = "data_page"
+        if page_key not in st.session_state:
+            st.session_state[page_key] = 1
+        
+        current_page = st.session_state[page_key]
+        start_idx = (current_page - 1) * rows_per_page
+        end_idx = min(start_idx + rows_per_page, len(df))
+        
+        page_df = df.iloc[start_idx:end_idx]
+        st.dataframe(page_df, use_container_width=True)
+        
+        if total_pages > 1:
+            col1, col2, col3, col4, col5 = st.columns([1, 1, 2, 1, 1])
+            with col1:
+                if st.button("⏮️ 首页", key="first_result"):
+                    st.session_state[page_key] = 1
+                    st.rerun()
+            with col2:
+                if st.button("◀ 上一页", key="prev_result"):
+                    if st.session_state[page_key] > 1:
+                        st.session_state[page_key] -= 1
+                        st.rerun()
+            with col3:
+                st.markdown(f"<div style='text-align: center;'>第 {current_page} / {total_pages} 页</div>", unsafe_allow_html=True)
+            with col4:
+                if st.button("下一页 ▶", key="next_result"):
+                    if st.session_state[page_key] < total_pages:
+                        st.session_state[page_key] += 1
+                        st.rerun()
+            with col5:
+                if st.button("末页 ⏭️", key="last_result"):
+                    st.session_state[page_key] = total_pages
+                    st.rerun()
 
 else:
     # 引导页面
@@ -792,19 +753,18 @@ else:
         <div class="card" style="text-align: center;">
             <div style="font-size: 20px; margin-bottom: 16px;">🎯 能做什么</div>
             <div style="display: flex; justify-content: center; gap: 32px; flex-wrap: wrap;">
-                <div>📊 数据分布</div>
-                <div>📈 趋势分析</div>
-                <div>🏆 排名对比</div>
-                <div>🎯 决策建议</div>
-                <div>📌 趣味发现</div>
-                <div>📉 智能图表</div>
+                <div>📊 渠道付费分析</div>
+                <div>🏙️ 城市等级分析</div>
+                <div>👥 用户类型分析</div>
+                <div>💾 留存状态分析</div>
+                <div>🎯 AI 决策建议</div>
             </div>
         </div>
     </div>
     
     <div style="margin-top: 24px; text-align: center; font-size: 14px; color: #888;">
-        <p>💡 上传你的数据（人事、销售、考勤、财务...），随便问</p>
-        <p>🤖 例如：「哪个部门人最多？」「给我一些建议」</p>
+        <p>💡 上传你的用户数据，问：「各渠道付费情况」「给我一些建议」</p>
+        <p>🤖 工具准确计算，AI 基于正确数据给出洞察和建议</p>
     </div>
     """, unsafe_allow_html=True)
 
@@ -812,7 +772,7 @@ else:
 st.markdown("---")
 st.markdown("""
 <div style="text-align: center; padding: 16px; font-size: 12px; color: #888;">
-    ⚡ Made with ☕ by Tuotuo09 · Powered by DeepSeek AI<br>
-    🔒 数据本地处理 · 不上传服务器 · 隐私安全
+    ⚡ Made with ☕ by Tuotuo09 · 工具准确计算 · AI 智能解读<br>
+    🔒 数据本地处理 · 只发送统计结果给 AI · 隐私安全
 </div>
 """, unsafe_allow_html=True)
