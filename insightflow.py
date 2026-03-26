@@ -1,7 +1,8 @@
 """
-InsightFlow - 智能数据决策助手（最终版）
+InsightFlow - 智能数据决策助手（最终修复版）
 作者：Tuotuo09
 功能：智能筛选 + 智能字段识别 + 通用数据分析
+修复：AI洞察跟随筛选、单位显示正确
 """
 
 import streamlit as st
@@ -180,7 +181,7 @@ def detect_metric_from_query(query, df):
                 if any(kw in col_lower for kw in keywords):
                     return col, agg_func
     
-    # 默认：返回第一个数值列，金额类用总和，其他用平均值
+    # 默认：返回第一个数值列
     default_col = real_numeric_cols[0]
     col_lower = default_col.lower()
     
@@ -245,6 +246,25 @@ def precompute_stats(df, value_col, agg_func):
         "agg_func": agg_func
     }
 
+def get_unit(value_col):
+    """根据字段名获取单位"""
+    col_lower = value_col.lower()
+    
+    if '年龄' in col_lower or 'age' in col_lower:
+        return "岁"
+    elif '单价' in col_lower or '价格' in col_lower or 'price' in col_lower:
+        return "元"
+    elif '时长' in col_lower or '时间' in col_lower or 'duration' in col_lower:
+        return "分钟"
+    elif '天数' in col_lower or '天' in col_lower or 'days' in col_lower:
+        return "天"
+    elif '次数' in col_lower or '次' in col_lower:
+        return "次"
+    elif '付费' in col_lower or '金额' in col_lower or '薪资' in col_lower or '工资' in col_lower:
+        return "元"
+    else:
+        return ""
+
 def generate_analysis_summary(stats, filter_name):
     """生成分析结果文字总结"""
     if stats['group_stats'] is None or len(stats['group_stats']) == 0:
@@ -253,54 +273,19 @@ def generate_analysis_summary(stats, filter_name):
     group_col = stats['group_col']
     value_col = stats['value_col']
     agg_func = stats['agg_func']
-    
-    # 确定单位
-    if '年龄' in value_col or '单价' in value_col or '时长' in value_col:
-        unit = "（平均值）"
-    else:
-        unit = "（总和）"
+    unit = get_unit(value_col)
     
     summary = ""
     
-    # 如果有筛选条件
     if filter_name:
-        # 单渠道分析
-        summary += f"• {filter_name}渠道共有 {stats['total_rows']} 名用户\n"
+        summary += f"• {filter_name}共有 {stats['total_rows']} 条记录\n"
         
-        # 找数值字段
         if agg_func == "mean":
-            summary += f"• 平均{value_col}：{stats['group_stats'].iloc[0][value_col]:.1f}\n"
+            summary += f"• 平均{value_col}：{stats['group_stats'].iloc[0][value_col]:.1f}{unit}\n"
         else:
             total_val = stats['group_stats'].iloc[0][value_col]
             avg_val = total_val / stats['total_rows'] if stats['total_rows'] > 0 else 0
-            summary += f"• {value_col}总额：{total_val:,.0f} 元（人均 {avg_val:.0f} 元）\n"
-        
-        # 找付费相关字段
-        pay_col = None
-        for col in stats['numeric_cols']:
-            if '付费' in col or '金额' in col:
-                pay_col = col
-                break
-        
-        if pay_col and pay_col != value_col:
-            pay_data = stats['numeric_stats'][stats['numeric_stats']['字段'] == pay_col]
-            if len(pay_data) > 0:
-                total_pay = pay_data['总和'].values[0]
-                avg_pay = pay_data['平均值'].values[0]
-                summary += f"• 付费总额：{total_pay:,.0f} 元（人均 {avg_pay:.0f} 元）\n"
-        
-        # 找活跃相关字段
-        active_col = None
-        for col in stats['numeric_cols']:
-            if '活跃' in col or '天数' in col:
-                active_col = col
-                break
-        
-        if active_col:
-            active_data = stats['numeric_stats'][stats['numeric_stats']['字段'] == active_col]
-            if len(active_data) > 0:
-                avg_active = active_data['平均值'].values[0]
-                summary += f"• 平均{active_col}：{avg_active:.1f} 天\n"
+            summary += f"• {value_col}总额：{total_val:,.0f}{unit}（人均 {avg_val:.0f}{unit}）\n"
         
         # 找年龄字段
         age_col = None
@@ -309,36 +294,33 @@ def generate_analysis_summary(stats, filter_name):
                 age_col = col
                 break
         
-        if age_col:
+        if age_col and age_col != value_col:
             age_data = stats['numeric_stats'][stats['numeric_stats']['字段'] == age_col]
             if len(age_data) > 0:
                 avg_age = age_data['平均值'].values[0]
                 summary += f"• 平均年龄：{avg_age:.1f} 岁\n"
     
     else:
-        # 整体分析
-        summary += f"• 总用户数：{stats['total_rows']} 人\n"
+        summary += f"• 总记录数：{stats['total_rows']} 条\n"
         
-        # 找数值字段排名
         if stats['group_stats'] is not None and len(stats['group_stats']) > 0:
             top3 = stats['group_stats'].head(3)
             summary += f"• {group_col}排名："
             for _, row in top3.iterrows():
                 if agg_func == "mean":
-                    summary += f"{row[group_col]}({row[value_col]:.1f}) "
+                    summary += f"{row[group_col]}({row[value_col]:.1f}{unit}) "
                 else:
-                    summary += f"{row[group_col]}({row[value_col]:,.0f}) "
+                    summary += f"{row[group_col]}({row[value_col]:,.0f}{unit}) "
             summary += "\n"
             
-            # 找出最高和最低
             first = stats['group_stats'].iloc[0]
             last = stats['group_stats'].iloc[-1]
             summary += f"• 最高：{first[group_col]}，最低：{last[group_col]}\n"
     
     return summary
 
-def generate_ai_insight(query, stats, analysis_summary, filter_name):
-    """生成 AI 智能洞察"""
+def generate_ai_insight(query, df, stats, analysis_summary, filter_name):
+    """生成 AI 智能洞察（基于筛选后的数据）"""
     data_summary = f"用户问题：{query}\n\n"
     
     if filter_name:
@@ -346,21 +328,26 @@ def generate_ai_insight(query, stats, analysis_summary, filter_name):
     
     data_summary += f"【分析结果】\n{analysis_summary}\n\n"
     
+    # 添加筛选后的数据摘要
+    data_summary += f"【数据概况】共 {stats['total_rows']} 条记录\n"
+    
     if stats['group_stats'] is not None and len(stats['group_stats']) > 0:
         group_col = stats['group_col']
         value_col = stats['value_col']
         agg_func = stats['agg_func']
-        data_summary += f"【详细数据】\n"
+        unit = get_unit(value_col)
+        data_summary += f"【{group_col}分布】\n"
         for _, row in stats['group_stats'].iterrows():
             if agg_func == "mean":
-                data_summary += f"- {row[group_col]}: {row[value_col]:.1f}\n"
+                data_summary += f"- {row[group_col]}: {row[value_col]:.1f}{unit}\n"
             else:
-                data_summary += f"- {row[group_col]}: {row[value_col]:,.0f}\n"
+                data_summary += f"- {row[group_col]}: {row[value_col]:,.0f}{unit}\n"
     
     if stats['numeric_stats'] is not None and len(stats['numeric_stats']) > 0:
         data_summary += f"\n【数值统计】\n"
         for _, row in stats['numeric_stats'].head(5).iterrows():
-            data_summary += f"- {row['字段']}: 平均{row['平均值']:.1f}, 总和{row['总和']:.0f}\n"
+            unit = get_unit(row['字段'])
+            data_summary += f"- {row['字段']}: 平均{row['平均值']:.1f}{unit}, 总和{row['总和']:.0f}{unit}\n"
     
     prompt = f"""基于以下准确数据，给出洞察和建议：
 
@@ -546,7 +533,7 @@ if uploaded_file:
         # 检测分析指标
         value_col, agg_func = detect_metric_from_query(query, display_df)
         
-        # 计算统计
+        # 计算统计（基于筛选后的数据）
         stats = precompute_stats(display_df, value_col, agg_func)
         
         # 生成分析结果总结
@@ -571,11 +558,11 @@ if uploaded_file:
         st.markdown("### 📊 分析结果")
         st.markdown(analysis_summary)
         
-        # ==================== AI 智能洞察 ====================
+        # ==================== AI 智能洞察（基于筛选后的数据）====================
         api_ok = check_api_availability()
         if api_ok:
             with st.spinner(random.choice(LOADING_MESSAGES)):
-                ai_response = generate_ai_insight(query, stats, analysis_summary, filter_val)
+                ai_response = generate_ai_insight(query, display_df, stats, analysis_summary, filter_val)
                 if ai_response:
                     st.session_state.ai_response = ai_response
                     st.markdown("### 🧠 Tuotuo's AI 智能洞察")
