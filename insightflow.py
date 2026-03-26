@@ -1,8 +1,7 @@
 """
-InsightFlow - 智能数据决策助手（最终版）
+InsightFlow - 智能数据决策助手（最终修复版）
 作者：Tuotuo09
-功能：自动适配任何数据，智能筛选，AI 深度分析
-布局：上传区 → 输入区 → 分析结果 → AI 洞察 → 数据明细&图表
+修复：上传区域默认文字隐藏、分析结果显示正确数值、年龄用平均值
 """
 
 import streamlit as st
@@ -63,6 +62,12 @@ if 'total_columns' not in st.session_state:
     st.session_state.total_columns = 0
 if 'analysis_summary' not in st.session_state:
     st.session_state.analysis_summary = ""
+if 'group_col' not in st.session_state:
+    st.session_state.group_col = None
+if 'value_col' not in st.session_state:
+    st.session_state.value_col = None
+if 'agg_func' not in st.session_state:
+    st.session_state.agg_func = "sum"
 
 # ==================== DeepSeek API 配置 ====================
 DEEPSEEK_API_KEY = "sk-52bcbd3d232945828250c3a1408598ff"
@@ -145,30 +150,80 @@ def detect_filter_from_query(query, df):
                 return col, str(val)
     return None, None
 
-def precompute_stats(df):
-    """工具准确计算各项统计"""
-    total_rows = len(df)
-    total_columns = len(df.columns)
-    
+def auto_select_value_field(df, query):
+    """根据用户问题自动选择数值字段"""
     numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-    text_cols = df.select_dtypes(include=['object']).columns.tolist()
     
     # 排除 ID 类字段
     id_keywords = ['id', '编号', '工号', '序号', '用户id', '员工id']
     real_numeric_cols = [c for c in numeric_cols if not any(kw in c.lower() for kw in id_keywords)]
     
-    # 分组统计（自动取第一个文本列和第一个数值列）
+    if not real_numeric_cols:
+        return None, "sum"
+    
+    # 关键词映射
+    keywords = {
+        '金额付费销售额薪资收入': ['金额', '付费', '销售额', '薪资', '收入', 'amount', 'sales', 'salary', 'revenue'],
+        '年龄单价价格时长': ['年龄', '单价', '价格', '时长', '时间', 'age', 'price', 'duration'],
+        '数量人数次数天数': ['数量', '人数', '次数', '天数', 'count', 'number', 'times', 'days']
+    }
+    
+    # 根据用户问题匹配
+    query_lower = query.lower()
+    
+    # 先匹配具体字段
+    for col in real_numeric_cols:
+        col_lower = col.lower()
+        if '付费' in query_lower and ('付费' in col_lower or '金额' in col_lower):
+            return col, "sum"
+        if '年龄' in query_lower and '年龄' in col_lower:
+            return col, "mean"
+        if '活跃' in query_lower and ('活跃' in col_lower or '天数' in col_lower):
+            return col, "sum"
+        if '登录' in query_lower and ('登录' in col_lower or '次数' in col_lower):
+            return col, "sum"
+    
+    # 默认返回第一个数值列，并判断聚合方式
+    default_col = real_numeric_cols[0]
+    col_lower = default_col.lower()
+    
+    # 判断聚合方式
+    if any(kw in col_lower for kw in ['年龄', '单价', '价格', '时长']):
+        agg_func = "mean"
+    else:
+        agg_func = "sum"
+    
+    return default_col, agg_func
+
+def precompute_stats(df, value_col, agg_func):
+    """工具准确计算各项统计"""
+    total_rows = len(df)
+    total_columns = len(df.columns)
+    
+    text_cols = df.select_dtypes(include=['object']).columns.tolist()
+    
+    # 分组统计
     group_stats = None
     group_col = None
-    value_col = None
-    if text_cols and real_numeric_cols:
+    if text_cols and value_col and value_col in df.columns:
         group_col = text_cols[0]
-        value_col = real_numeric_cols[0]
-        grouped = df.groupby(group_col)[value_col].sum().reset_index()
-        grouped.columns = [group_col, value_col]
-        group_stats = grouped.sort_values(value_col, ascending=False)
+        
+        if agg_func == "mean":
+            grouped = df.groupby(group_col)[value_col].mean().reset_index()
+            grouped.columns = [group_col, value_col]
+            grouped = grouped.sort_values(value_col, ascending=False)
+        else:
+            grouped = df.groupby(group_col)[value_col].sum().reset_index()
+            grouped.columns = [group_col, value_col]
+            grouped = grouped.sort_values(value_col, ascending=False)
+        
+        group_stats = grouped
     
-    # 数值列统计（所有数值列）
+    # 数值列统计
+    numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+    id_keywords = ['id', '编号', '工号', '序号', '用户id', '员工id']
+    real_numeric_cols = [c for c in numeric_cols if not any(kw in c.lower() for kw in id_keywords)]
+    
     numeric_stats = None
     if real_numeric_cols:
         stats_data = []
@@ -190,7 +245,8 @@ def precompute_stats(df):
         "group_stats": group_stats,
         "numeric_stats": numeric_stats,
         "group_col": group_col,
-        "value_col": value_col
+        "value_col": value_col,
+        "agg_func": agg_func
     }
 
 def generate_analysis_summary(stats):
@@ -200,34 +256,51 @@ def generate_analysis_summary(stats):
     
     group_col = stats['group_col']
     value_col = stats['value_col']
+    agg_func = stats['agg_func']
+    
+    # 确定单位
+    if '年龄' in value_col or '单价' in value_col or '时长' in value_col:
+        unit = "（平均值）"
+    else:
+        unit = "（总和）"
     
     # 规模
     summary = f"1. 规模：数据包含{stats['total_rows']}条记录，涉及{len(stats['group_stats'])}个{group_col}。\n"
     
     # 数值特征（排名）
     top3 = stats['group_stats'].head(3)
-    ranking = "、".join([f"{row[group_col]}（{row[value_col]:,.0f}）" for _, row in top3.iterrows()])
-    summary += f"2. 数值特征：{group_col}排名为：{ranking}。\n"
+    if agg_func == "mean":
+        ranking = "、".join([f"{row[group_col]}（{row[value_col]:.1f}）" for _, row in top3.iterrows()])
+    else:
+        ranking = "、".join([f"{row[group_col]}（{row[value_col]:,.0f}）" for _, row in top3.iterrows()])
+    summary += f"2. 数值特征：{group_col}{unit}排名为：{ranking}。\n"
     
     # 分布情况
-    total = stats['group_stats'][value_col].sum()
-    if total > 0:
+    total = stats['group_stats'][value_col].sum() if agg_func != "mean" else len(stats['group_stats'])
+    if total > 0 and agg_func != "mean":
         top1_name = top3.iloc[0][group_col]
         top1_pct = top3.iloc[0][value_col] / total * 100
         summary += f"3. 分布情况：{top1_name}占比最高（{top1_pct:.0f}%）。\n"
+    elif agg_func == "mean":
+        top1_name = top3.iloc[0][group_col]
+        top1_val = top3.iloc[0][value_col]
+        summary += f"3. 分布情况：{top1_name}平均值最高（{top1_val:.1f}）。\n"
     
     # 关键发现
     if len(stats['group_stats']) >= 2:
         first = stats['group_stats'].iloc[0]
         second = stats['group_stats'].iloc[1]
-        diff_pct = (first[value_col] - second[value_col]) / second[value_col] * 100 if second[value_col] > 0 else 0
-        summary += f"4. 关键发现：{first[group_col]}比{second[group_col]}高出{diff_pct:.0f}%，是主要贡献者。"
+        if second[value_col] > 0:
+            diff_pct = (first[value_col] - second[value_col]) / second[value_col] * 100
+            if agg_func == "mean":
+                summary += f"4. 关键发现：{first[group_col]}比{second[group_col]}高出{diff_pct:.0f}%，是主要领先者。"
+            else:
+                summary += f"4. 关键发现：{first[group_col]}比{second[group_col]}高出{diff_pct:.0f}%，是主要贡献者。"
     
     return summary
 
 def generate_ai_insight(query, stats, analysis_summary, filter_name):
     """生成 AI 智能洞察"""
-    # 构建发送给 AI 的数据
     data_summary = f"用户问题：{query}\n\n"
     
     if filter_name:
@@ -235,15 +308,17 @@ def generate_ai_insight(query, stats, analysis_summary, filter_name):
     
     data_summary += f"【分析结果】\n{analysis_summary}\n\n"
     
-    # 添加分组统计数据
     if stats['group_stats'] is not None and len(stats['group_stats']) > 0:
         group_col = stats['group_col']
         value_col = stats['value_col']
+        agg_func = stats['agg_func']
         data_summary += f"【详细数据】\n"
         for _, row in stats['group_stats'].iterrows():
-            data_summary += f"- {row[group_col]}: {row[value_col]:.0f}\n"
+            if agg_func == "mean":
+                data_summary += f"- {row[group_col]}: {row[value_col]:.1f}\n"
+            else:
+                data_summary += f"- {row[group_col]}: {row[value_col]:,.0f}\n"
     
-    # 添加数值统计
     if stats['numeric_stats'] is not None and len(stats['numeric_stats']) > 0:
         data_summary += f"\n【数值统计】\n"
         for _, row in stats['numeric_stats'].head(5).iterrows():
@@ -327,21 +402,40 @@ st.markdown(f"""
         margin-bottom: 16px;
     }}
     
+    /* 自定义上传按钮样式 */
     [data-testid="stFileUploader"] > div:first-child {{
         background: linear-gradient(135deg, {PRIMARY_BLUE}, {DARK_BLUE});
         border-radius: 50px;
         padding: 16px 40px;
         text-align: center;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        box-shadow: 0 4px 12px rgba(30,136,229,0.3);
+        border: none;
+    }}
+    [data-testid="stFileUploader"] > div:first-child:hover {{
+        transform: translateY(-2px);
+        box-shadow: 0 6px 20px rgba(30,136,229,0.4);
     }}
     [data-testid="stFileUploader"] button {{
         background: transparent !important;
         color: white !important;
         font-size: 18px !important;
         font-weight: 600 !important;
+        border: none !important;
+        padding: 0 !important;
     }}
-    [data-testid="stFileUploader"] button svg {{ display: none; }}
+    [data-testid="stFileUploader"] button svg {{
+        display: none;
+    }}
     [data-testid="stFileUploader"] button:before {{
         content: "🚀 点击上传 Excel 或 CSV";
+        font-size: 18px;
+        font-weight: 600;
+    }}
+    /* 隐藏默认的上传提示文字 */
+    [data-testid="stFileUploader"] > div:first-child > div:first-child {{
+        display: none;
     }}
 </style>
 """, unsafe_allow_html=True)
@@ -417,8 +511,11 @@ if uploaded_file:
             filter_col = None
             filter_val = None
         
+        # 自动选择数值字段和聚合方式
+        value_col, agg_func = auto_select_value_field(display_df, query)
+        
         # 计算统计
-        stats = precompute_stats(display_df)
+        stats = precompute_stats(display_df, value_col, agg_func)
         
         # 生成分析结果总结
         analysis_summary = generate_analysis_summary(stats)
@@ -435,6 +532,7 @@ if uploaded_file:
         st.session_state.analysis_summary = analysis_summary
         st.session_state.group_col = stats['group_col']
         st.session_state.value_col = stats['value_col']
+        st.session_state.agg_func = stats['agg_func']
         
         # ==================== 显示分析结果 ====================
         st.markdown("---")
@@ -450,7 +548,6 @@ if uploaded_file:
                     st.session_state.ai_response = ai_response
                     st.markdown("### 🧠 Tuotuo's AI 智能洞察")
                     
-                    # 解析并显示
                     if "【洞察】" in ai_response:
                         parts = ai_response.split("【洞察】")
                         if len(parts) > 1:
@@ -493,7 +590,7 @@ if uploaded_file:
                 )
                 st.plotly_chart(fig, use_container_width=True)
         
-        # 数据明细分页（如果是筛选后的数据）
+        # 数据明细分页
         if len(display_df) > 0:
             st.markdown("---")
             st.markdown(f"### 📋 全部数据明细（共 {len(display_df)} 条）")
