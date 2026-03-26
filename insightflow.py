@@ -1,8 +1,7 @@
 """
 InsightFlow - 智能数据决策助手（最终版）
 作者：Tuotuo09
-功能：智能筛选 + 智能字段识别 + 通用数据分析
-修复：AI洞察跟随筛选、单位显示正确、筛选后总额正确
+功能：多条件筛选 + 智能字段识别 + 通用数据分析
 """
 
 import streamlit as st
@@ -47,10 +46,8 @@ if 'current_df' not in st.session_state:
     st.session_state.current_df = None
 if 'filtered_df' not in st.session_state:
     st.session_state.filtered_df = None
-if 'filter_name' not in st.session_state:
-    st.session_state.filter_name = None
-if 'filter_col' not in st.session_state:
-    st.session_state.filter_col = None
+if 'filter_desc' not in st.session_state:
+    st.session_state.filter_desc = None
 if 'group_stats' not in st.session_state:
     st.session_state.group_stats = None
 if 'numeric_stats' not in st.session_state:
@@ -140,16 +137,18 @@ def clean_dataframe(df):
             df[col] = df[col].fillna('')
     return df
 
-def detect_filter_from_query(query, df):
-    """从用户问题中提取筛选条件"""
+def detect_filters_from_query(query, df):
+    """从用户问题中提取多个筛选条件"""
     text_cols = df.select_dtypes(include=['object']).columns.tolist()
+    filters = []
     
     for col in text_cols:
         unique_vals = df[col].dropna().unique().tolist()
         for val in unique_vals:
             if val and str(val) in query:
-                return col, str(val)
-    return None, None
+                filters.append((col, str(val)))
+    
+    return filters
 
 def detect_metric_from_query(query, df):
     """从用户问题中提取分析指标"""
@@ -191,6 +190,18 @@ def detect_metric_from_query(query, df):
         agg_func = "sum"
     
     return default_col, agg_func
+
+def apply_filters(df, filters):
+    """应用多个筛选条件"""
+    filtered_df = df.copy()
+    filter_desc_parts = []
+    
+    for col, val in filters:
+        if col in filtered_df.columns:
+            filtered_df = filtered_df[filtered_df[col] == val]
+            filter_desc_parts.append(f"{col}={val}")
+    
+    return filtered_df, "、".join(filter_desc_parts) if filter_desc_parts else None
 
 def precompute_stats(df, value_col, agg_func):
     """工具准确计算各项统计"""
@@ -265,7 +276,7 @@ def get_unit(value_col):
     else:
         return ""
 
-def generate_analysis_summary(stats, filter_name):
+def generate_analysis_summary(stats, filter_desc):
     """生成分析结果文字总结"""
     if stats['group_stats'] is None or len(stats['group_stats']) == 0:
         return "数据中没有找到可分析的字段。"
@@ -277,9 +288,9 @@ def generate_analysis_summary(stats, filter_name):
     
     summary = ""
     
-    if filter_name:
+    if filter_desc:
         # 有筛选条件时，从 numeric_stats 获取总额
-        summary += f"• {filter_name}共有 {stats['total_rows']} 条记录\n"
+        summary += f"• {filter_desc} 共有 {stats['total_rows']} 条记录\n"
         
         # 获取总额
         total_val = 0
@@ -330,12 +341,12 @@ def generate_analysis_summary(stats, filter_name):
     
     return summary
 
-def generate_ai_insight(query, df, stats, analysis_summary, filter_name):
+def generate_ai_insight(query, df, stats, analysis_summary, filter_desc):
     """生成 AI 智能洞察（基于筛选后的数据）"""
     data_summary = f"用户问题：{query}\n\n"
     
-    if filter_name:
-        data_summary += f"【筛选条件】当前分析的是「{filter_name}」的数据\n\n"
+    if filter_desc:
+        data_summary += f"【筛选条件】当前分析的是「{filter_desc}」的数据\n\n"
     
     data_summary += f"【分析结果】\n{analysis_summary}\n\n"
     
@@ -522,24 +533,23 @@ if uploaded_file:
     # ==================== 输入区域 ====================
     st.markdown("---")
     
-    query = st.text_input("", placeholder="例如：「抖音」「抖音付费」「给我建议」", label_visibility="collapsed")
+    query = st.text_input("", placeholder="例如：「抖音」「抖音新用户」「抖音新用户付费」「给我建议」", label_visibility="collapsed")
     analyze_btn = st.button("🚀 开始分析", type="primary")
     
     # 简洁提示
-    st.caption("💡 试试：「抖音」「抖音付费」「给我建议」")
+    st.caption("💡 试试：「抖音」「抖音新用户」「抖音新用户付费」「给我建议」")
     
     # ==================== 分析逻辑 ====================
     if analyze_btn and query:
-        # 检测筛选条件
-        filter_col, filter_val = detect_filter_from_query(query, df)
+        # 检测多个筛选条件
+        filters = detect_filters_from_query(query, df)
         
-        if filter_col and filter_val and filter_col in df.columns:
-            display_df = df[df[filter_col] == filter_val]
-            st.info(f"🔍 已筛选：{filter_col} = {filter_val}，共 {len(display_df)} 条记录")
+        if filters:
+            display_df, filter_desc = apply_filters(df, filters)
+            st.info(f"🔍 已筛选：{filter_desc}，共 {len(display_df)} 条记录")
         else:
             display_df = df
-            filter_col = None
-            filter_val = None
+            filter_desc = None
         
         # 检测分析指标
         value_col, agg_func = detect_metric_from_query(query, display_df)
@@ -548,13 +558,12 @@ if uploaded_file:
         stats = precompute_stats(display_df, value_col, agg_func)
         
         # 生成分析结果总结
-        analysis_summary = generate_analysis_summary(stats, filter_val)
+        analysis_summary = generate_analysis_summary(stats, filter_desc)
         
         # 保存到 session_state
         st.session_state.has_result = True
         st.session_state.filtered_df = display_df
-        st.session_state.filter_name = filter_val
-        st.session_state.filter_col = filter_col
+        st.session_state.filter_desc = filter_desc
         st.session_state.group_stats = stats['group_stats']
         st.session_state.numeric_stats = stats['numeric_stats']
         st.session_state.total_rows = stats['total_rows']
@@ -573,7 +582,7 @@ if uploaded_file:
         api_ok = check_api_availability()
         if api_ok:
             with st.spinner(random.choice(LOADING_MESSAGES)):
-                ai_response = generate_ai_insight(query, display_df, stats, analysis_summary, filter_val)
+                ai_response = generate_ai_insight(query, display_df, stats, analysis_summary, filter_desc)
                 if ai_response:
                     st.session_state.ai_response = ai_response
                     st.markdown("### 🧠 Tuotuo's AI 智能洞察")
@@ -755,7 +764,7 @@ else:
         <div style="display: flex; justify-content: center; gap: 24px; flex-wrap: wrap;">
             <div>📊 自动识别字段</div>
             <div>📈 智能统计分析</div>
-            <div>🔍 自动筛选</div>
+            <div>🔍 多条件筛选</div>
             <div>📉 智能图表</div>
             <div>🎯 AI 决策建议</div>
         </div>
