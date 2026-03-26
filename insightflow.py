@@ -1,7 +1,7 @@
 """
-InsightFlow - 智能数据决策助手（通用版 + 字段选择器）
+InsightFlow - 智能数据决策助手（稳定版）
 作者：Tuotuo09
-功能：用户选择分析维度，工具准确计算，AI 智能解读
+功能：智能分析 + 决策建议
 """
 
 import streamlit as st
@@ -62,10 +62,6 @@ if 'total_rows' not in st.session_state:
     st.session_state.total_rows = 0
 if 'total_columns' not in st.session_state:
     st.session_state.total_columns = 0
-if 'group_col' not in st.session_state:
-    st.session_state.group_col = None
-if 'value_col' not in st.session_state:
-    st.session_state.value_col = None
 
 # ==================== DeepSeek API 配置 ====================
 DEEPSEEK_API_KEY = "sk-52bcbd3d232945828250c3a1408598ff"
@@ -148,42 +144,49 @@ def detect_filter_from_query(query, df):
                 return col, str(val)
     return None, None
 
-def generate_filtered_chart(df, filter_col, filter_val, group_col, value_col):
-    """根据筛选条件生成对应图表"""
+def generate_filtered_chart(df, filter_col, filter_val):
+    """根据筛选条件生成对应图表（通用版）"""
     try:
-        if group_col in df.columns and value_col in df.columns:
-            grouped = df.groupby(group_col)[value_col].sum().reset_index()
-            if len(grouped) > 0:
-                fig = px.bar(grouped, x=group_col, y=value_col, title=f"📊 {filter_val} - {group_col}分布")
-                fig.update_traces(marker_color=PRIMARY_BLUE)
-                return fig
+        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+        id_keywords = ['id', '编号', '工号', '序号']
+        real_numeric_cols = [c for c in numeric_cols if not any(kw in c.lower() for kw in id_keywords)]
+        
+        if real_numeric_cols:
+            value_col = real_numeric_cols[0]
+            text_cols = df.select_dtypes(include=['object']).columns.tolist()
+            if text_cols:
+                group_col = text_cols[0]
+                if group_col in df.columns and value_col in df.columns:
+                    grouped = df.groupby(group_col)[value_col].sum().reset_index()
+                    if len(grouped) > 0:
+                        fig = px.bar(grouped, x=group_col, y=value_col, title=f"📊 {filter_val} - {group_col}分布")
+                        fig.update_traces(marker_color=PRIMARY_BLUE)
+                        return fig
     except:
         pass
     return None
 
-def precompute_stats(df, group_col, value_col):
-    """工具准确计算各项统计（使用用户选择的字段）"""
-    
-    # 整体统计
+def precompute_stats(df):
+    """工具准确计算各项统计（通用版）"""
     total_rows = len(df)
     total_columns = len(df.columns)
     
-    # 自动识别数值列和文本列
     numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
     text_cols = df.select_dtypes(include=['object']).columns.tolist()
     
-    # 排除 ID 类字段
     id_keywords = ['id', '编号', '工号', '序号', '用户id', '员工id']
     real_numeric_cols = [c for c in numeric_cols if not any(kw in c.lower() for kw in id_keywords)]
     
-    # 分组统计（使用用户选择的字段）
+    # 分组统计（自动取第一个文本列和第一个数值列）
     group_stats = None
-    if group_col and group_col in df.columns and value_col and value_col in df.columns:
+    if text_cols and real_numeric_cols:
+        group_col = text_cols[0]
+        value_col = real_numeric_cols[0]
         grouped = df.groupby(group_col)[value_col].sum().reset_index()
         grouped.columns = [group_col, value_col]
         group_stats = grouped.sort_values(value_col, ascending=False)
     
-    # 数值列统计（所有数值列，不限制数量）
+    # 数值列统计（所有数值列）
     numeric_stats = None
     if real_numeric_cols:
         stats_data = []
@@ -204,8 +207,8 @@ def precompute_stats(df, group_col, value_col):
         "numeric_cols": real_numeric_cols,
         "group_stats": group_stats,
         "numeric_stats": numeric_stats,
-        "group_col": group_col,
-        "value_col": value_col
+        "group_col": text_cols[0] if text_cols else None,
+        "value_col": real_numeric_cols[0] if real_numeric_cols else None
     }
 
 def generate_ai_insight(query, stats):
@@ -215,7 +218,6 @@ def generate_ai_insight(query, stats):
     summary += f"【文本字段】{', '.join(stats['text_cols'][:10])}\n"
     summary += f"【数值字段】{', '.join(stats['numeric_cols'][:10])}\n\n"
     
-    # 发送用户选择的分组统计（全部发送）
     if stats['group_stats'] is not None and len(stats['group_stats']) > 0:
         group_col = stats['group_col']
         value_col = stats['value_col']
@@ -223,18 +225,14 @@ def generate_ai_insight(query, stats):
         for _, row in stats['group_stats'].iterrows():
             summary += f"- {row[group_col]}: {row[value_col]:.0f}\n"
     
-    # 发送所有数值统计（不限制数量）
     if stats['numeric_stats'] is not None and len(stats['numeric_stats']) > 0:
         summary += "\n【所有数值字段统计】\n"
         for _, row in stats['numeric_stats'].iterrows():
             summary += f"- {row['字段']}: 总和{row['总和']:.0f}, 平均{row['平均值']:.1f}, 最大{row['最大值']}, 最小{row['最小值']}\n"
     
-    # 增加关键摘要
-    total_rows = stats['total_rows']
     summary += f"\n【关键摘要】\n"
-    summary += f"- 总记录数: {total_rows}\n"
+    summary += f"- 总记录数: {stats['total_rows']}\n"
     
-    # 列出所有数值字段的平均值
     if stats['numeric_stats'] is not None and len(stats['numeric_stats']) > 0:
         for _, row in stats['numeric_stats'].iterrows():
             summary += f"- 平均{row['字段']}: {row['平均值']:.1f}\n"
@@ -283,10 +281,6 @@ st.markdown(f"""
         transform: translateY(-2px);
         box-shadow: 0 4px 12px rgba(30,136,229,0.3);
     }}
-    .stSelectbox label {{
-        font-weight: 600;
-        color: {PRIMARY_BLUE};
-    }}
     .stTextInput > div > div > input {{
         border-radius: 40px;
         border: 2px solid #E5E7EB;
@@ -333,7 +327,7 @@ st.markdown("""
 <div style="text-align: center; margin-bottom: 32px;">
     <h1 class="title">✨ InsightFlow · 智能数据决策助手</h1>
     <p style="font-size: 18px; color: #666; margin-top: -8px;">
-        🤖 Built by Tuotuo09 · 用户选择维度 · 工具准确计算 · AI 智能解读
+        🤖 Built by Tuotuo09 · 自动适配任何数据 · 智能分析 · AI 解读
     </p>
 </div>
 """, unsafe_allow_html=True)
@@ -358,40 +352,21 @@ if uploaded_file:
         st.dataframe(df.head(100), use_container_width=True)
         st.caption(f"共 {len(df)} 行，{len(df.columns)} 列")
     
-    # ==================== 字段选择器 ====================
-    st.markdown("---")
-    st.markdown("### 🎯 选择分析维度")
-    
-    text_cols = df.select_dtypes(include=['object']).columns.tolist()
-    numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-    
-    # 排除 ID 类字段
-    id_keywords = ['id', '编号', '工号', '序号', '用户id', '员工id']
-    real_numeric_cols = [c for c in numeric_cols if not any(kw in c.lower() for kw in id_keywords)]
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        group_col = st.selectbox("📊 分组字段（X轴）", text_cols, key="group_col")
-    with col2:
-        if real_numeric_cols:
-            value_col = st.selectbox("📈 数值字段（Y轴）", real_numeric_cols, key="value_col")
-        else:
-            value_col = None
-            st.warning("⚠️ 没有找到数值字段，请确保数据包含数字列")
-    
     # 问答区域
     st.markdown("---")
     query = st.text_input("", placeholder="例如：给我一些建议 | 分析一下数据", label_visibility="collapsed")
     analyze_btn = st.button("🚀 开始分析", type="primary")
     
     # 动态示例
-    if text_cols and real_numeric_cols:
+    text_cols = df.select_dtypes(include=['object']).columns.tolist()
+    numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+    if text_cols and numeric_cols:
         st.caption(f"💡 试试：给我一些建议 · {text_cols[0]}分布 · 筛选条件会自动识别")
     else:
         st.caption("💡 试试：给我一些建议")
     
-    # ==================== 分析逻辑 ====================
-    if analyze_btn and query and value_col:
+    # 分析逻辑
+    if analyze_btn and query:
         # 检测筛选条件
         filter_col, filter_val = detect_filter_from_query(query, df)
         
@@ -403,8 +378,8 @@ if uploaded_file:
             filter_col = None
             filter_val = None
         
-        # 计算统计（使用用户选择的字段）
-        stats = precompute_stats(display_df, group_col, value_col)
+        # 计算统计
+        stats = precompute_stats(display_df)
         
         # 保存到 session_state
         st.session_state.has_result = True
@@ -415,8 +390,6 @@ if uploaded_file:
         st.session_state.numeric_stats = stats['numeric_stats']
         st.session_state.total_rows = stats['total_rows']
         st.session_state.total_columns = stats['total_columns']
-        st.session_state.group_col = group_col
-        st.session_state.value_col = value_col
         
         # 显示整体指标
         st.markdown("---")
@@ -429,9 +402,17 @@ if uploaded_file:
         with col3:
             st.metric("数值字段", len(stats['numeric_cols']))
         
-        # 显示分组统计表格（用户选择的维度）
+        # 显示筛选图表
+        if filter_col and filter_val:
+            filter_fig = generate_filtered_chart(display_df, filter_col, filter_val)
+            if filter_fig:
+                st.plotly_chart(filter_fig, use_container_width=True)
+        
+        # 显示分组统计表格
         if stats['group_stats'] is not None and len(stats['group_stats']) > 0:
-            st.markdown(f"### 📊 {group_col} 分布（按 {value_col} 求和）")
+            group_col = stats['group_col']
+            value_col = stats['value_col']
+            st.markdown(f"### 📊 {group_col} 分布")
             st.dataframe(stats['group_stats'], use_container_width=True)
             
             # 显示图表
@@ -500,9 +481,6 @@ if uploaded_file:
     elif analyze_btn and not query:
         st.warning("💡 请输入一个问题～")
     
-    elif analyze_btn and not value_col:
-        st.warning("⚠️ 请先选择数值字段")
-    
     # 显示上次结果
     elif st.session_state.has_result and not analyze_btn:
         st.markdown("---")
@@ -516,10 +494,15 @@ if uploaded_file:
             numeric_count = len(st.session_state.current_df.select_dtypes(include=[np.number]).columns) if st.session_state.current_df is not None else 0
             st.metric("数值列", numeric_count)
         
+        if st.session_state.filter_col and st.session_state.filtered_df is not None:
+            filter_fig = generate_filtered_chart(st.session_state.filtered_df, st.session_state.filter_col, st.session_state.filter_name)
+            if filter_fig:
+                st.plotly_chart(filter_fig, use_container_width=True)
+        
         if st.session_state.group_stats is not None and len(st.session_state.group_stats) > 0:
-            group_col = st.session_state.group_col
-            value_col = st.session_state.value_col
-            st.markdown(f"### 📊 {group_col} 分布（按 {value_col} 求和）")
+            group_col = st.session_state.group_stats.columns[0]
+            value_col = st.session_state.group_stats.columns[1]
+            st.markdown(f"### 📊 {group_col} 分布")
             st.dataframe(st.session_state.group_stats, use_container_width=True)
             
             fig = px.bar(st.session_state.group_stats, x=group_col, y=value_col, title=f"{group_col} 分布")
@@ -578,8 +561,8 @@ else:
     <div class="card" style="text-align: center;">
         <div style="font-size: 20px; margin-bottom: 16px;">🎯 上传你的数据，开始智能分析</div>
         <div style="display: flex; justify-content: center; gap: 24px; flex-wrap: wrap;">
-            <div>📊 选择分组字段</div>
-            <div>📈 选择数值字段</div>
+            <div>📊 自动识别字段</div>
+            <div>📈 智能统计分析</div>
             <div>🔍 自动筛选</div>
             <div>📉 智能图表</div>
             <div>🎯 AI 决策建议</div>
@@ -594,7 +577,7 @@ else:
 st.markdown("---")
 st.markdown("""
 <div style="text-align: center; font-size: 12px; color: #888;">
-    ⚡ Made with ☕ by Tuotuo09 · 用户选择维度 · 工具准确计算 · AI 智能解读<br>
+    ⚡ Made with ☕ by Tuotuo09 · 自动适配任何数据 · AI 智能解读<br>
     🔒 数据本地处理 · 只发送统计结果
 </div>
 """, unsafe_allow_html=True)
