@@ -1,7 +1,7 @@
 """
 InsightFlow - 智能数据决策助手（最终版）
 作者：Tuotuo09
-功能：精确匹配 + 按词拆分 + 多条件 AND 筛选 + 动态提示
+功能：精确匹配 + 按词拆分 + 多条件 AND 筛选 + 动态提示 + 全面分析结果
 """
 
 import streamlit as st
@@ -306,7 +306,7 @@ def get_unit(value_col):
         return ""
 
 def generate_analysis_summary(stats, filter_desc):
-    """生成分析结果文字总结"""
+    """生成分析结果文字总结（更全面）"""
     if stats['group_stats'] is None or len(stats['group_stats']) == 0:
         return "数据中没有找到可分析的字段。"
     
@@ -318,7 +318,8 @@ def generate_analysis_summary(stats, filter_desc):
     summary = ""
     
     if filter_desc:
-        # 有筛选条件时，从 numeric_stats 获取总额
+        # 有筛选条件时，显示详细数据
+        summary += f"📊 整体数据\n"
         summary += f"• {filter_desc} 共有 {stats['total_rows']} 条记录\n"
         
         # 获取总额
@@ -330,7 +331,6 @@ def generate_analysis_summary(stats, filter_desc):
                     break
         
         if agg_func == "mean" or total_val == 0:
-            # 如果是平均值类型，从 group_stats 取
             avg_val = stats['group_stats'].iloc[0][value_col]
             summary += f"• 平均{value_col}：{avg_val:.1f}{unit}\n"
         else:
@@ -349,24 +349,74 @@ def generate_analysis_summary(stats, filter_desc):
             if len(age_data) > 0:
                 avg_age = age_data['平均值'].values[0]
                 summary += f"• 平均年龄：{avg_age:.1f} 岁\n"
+        
+        # 找活跃字段
+        active_col = None
+        for col in stats['numeric_cols']:
+            if '活跃' in col or '天数' in col:
+                active_col = col
+                break
+        
+        if active_col:
+            active_data = stats['numeric_stats'][stats['numeric_stats']['字段'] == active_col]
+            if len(active_data) > 0:
+                avg_active = active_data['平均值'].values[0]
+                summary += f"• 平均{active_col}：{avg_active:.1f} 天\n"
     
     else:
-        # 无筛选条件时，显示整体分析
+        # 无筛选条件时，显示全面分析
+        summary += f"📊 整体数据\n"
         summary += f"• 总记录数：{stats['total_rows']} 条\n"
         
+        # 找付费金额字段
+        pay_col = None
+        for col in stats['numeric_cols']:
+            if '付费' in col or '金额' in col:
+                pay_col = col
+                break
+        
+        if pay_col:
+            pay_data = stats['numeric_stats'][stats['numeric_stats']['字段'] == pay_col]
+            if len(pay_data) > 0:
+                total_pay = pay_data['总和'].values[0]
+                avg_pay = pay_data['平均值'].values[0]
+                summary += f"• 总付费金额：{total_pay:,.0f}元\n"
+                summary += f"• 人均付费：{avg_pay:.1f}元\n"
+        
+        # 找年龄字段
+        age_col = None
+        for col in stats['numeric_cols']:
+            if '年龄' in col or 'age' in col.lower():
+                age_col = col
+                break
+        
+        if age_col:
+            age_data = stats['numeric_stats'][stats['numeric_stats']['字段'] == age_col]
+            if len(age_data) > 0:
+                avg_age = age_data['平均值'].values[0]
+                summary += f"• 平均年龄：{avg_age:.1f} 岁\n"
+        
+        # 找活跃字段
+        active_col = None
+        for col in stats['numeric_cols']:
+            if '活跃' in col or '天数' in col:
+                active_col = col
+                break
+        
+        if active_col:
+            active_data = stats['numeric_stats'][stats['numeric_stats']['字段'] == active_col]
+            if len(active_data) > 0:
+                avg_active = active_data['平均值'].values[0]
+                summary += f"• 平均{active_col}：{avg_active:.1f} 天\n"
+        
+        # 渠道排名
         if stats['group_stats'] is not None and len(stats['group_stats']) > 0:
-            top3 = stats['group_stats'].head(3)
-            summary += f"• {group_col}排名："
-            for _, row in top3.iterrows():
+            summary += f"\n📈 {group_col}排名\n"
+            for _, row in stats['group_stats'].iterrows():
                 if agg_func == "mean":
-                    summary += f"{row[group_col]}({row[value_col]:.1f}{unit}) "
+                    summary += f"• {row[group_col]}：{row[value_col]:.1f}{unit}\n"
                 else:
-                    summary += f"{row[group_col]}({row[value_col]:,.0f}{unit}) "
-            summary += "\n"
-            
-            first = stats['group_stats'].iloc[0]
-            last = stats['group_stats'].iloc[-1]
-            summary += f"• 最高：{first[group_col]}，最低：{last[group_col]}\n"
+                    summary += f"• {row[group_col]}：{row[value_col]:,.0f}{unit}\n"
     
     return summary
 
@@ -541,7 +591,12 @@ st.markdown(f"""
         font-size: 18px;
         font-weight: 600;
     }}
+    /* 隐藏默认的上传提示文字 */
     [data-testid="stFileUploader"] > div:first-child > div:first-child {{
+        display: none;
+    }}
+    /* 隐藏默认的文件名显示 */
+    [data-testid="stFileUploader"] > div:first-child > div:last-child {{
         display: none;
     }}
 </style>
