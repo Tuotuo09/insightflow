@@ -1,7 +1,7 @@
 """
 InsightFlow - 智能数据决策助手（最终版）
 作者：Tuotuo09
-功能：多条件筛选 + 智能字段识别 + 通用数据分析
+功能：随便问+帮你分心+决策建议
 """
 
 import streamlit as st
@@ -138,17 +138,56 @@ def clean_dataframe(df):
     return df
 
 def detect_filters_from_query(query, df):
-    """从用户问题中提取多个筛选条件"""
+    """从用户问题中提取筛选条件（按词拆分，精确匹配，多条件AND）"""
     text_cols = df.select_dtypes(include=['object']).columns.tolist()
-    filters = []
     
+    # 构建所有可能的筛选值映射
+    value_to_cols = {}
     for col in text_cols:
         unique_vals = df[col].dropna().unique().tolist()
         for val in unique_vals:
-            if val and str(val) in query:
-                filters.append((col, str(val)))
+            if val:
+                if val not in value_to_cols:
+                    value_to_cols[val] = []
+                value_to_cols[val].append(col)
+    
+    # 将用户输入拆分成独立的词
+    words = []
+    # 按空格分词
+    for part in query.split():
+        if part:
+            words.append(part)
+    # 也尝试匹配整个短语
+    words.append(query)
+    # 去重
+    words = list(set(words))
+    
+    # 筛选匹配的词
+    filters = []
+    seen_cols = set()
+    
+    for word in words:
+        if word in value_to_cols:
+            # 精确匹配
+            for col in value_to_cols[word]:
+                if col not in seen_cols:
+                    filters.append((col, word))
+                    seen_cols.add(col)
+                    break
     
     return filters
+
+def apply_filters(df, filters):
+    """应用多个筛选条件（AND）"""
+    filtered_df = df.copy()
+    filter_desc_parts = []
+    
+    for col, val in filters:
+        if col in filtered_df.columns:
+            filtered_df = filtered_df[filtered_df[col] == val]
+            filter_desc_parts.append(f"{col}={val}")
+    
+    return filtered_df, "、".join(filter_desc_parts) if filter_desc_parts else None
 
 def detect_metric_from_query(query, df):
     """从用户问题中提取分析指标"""
@@ -190,18 +229,6 @@ def detect_metric_from_query(query, df):
         agg_func = "sum"
     
     return default_col, agg_func
-
-def apply_filters(df, filters):
-    """应用多个筛选条件"""
-    filtered_df = df.copy()
-    filter_desc_parts = []
-    
-    for col, val in filters:
-        if col in filtered_df.columns:
-            filtered_df = filtered_df[filtered_df[col] == val]
-            filter_desc_parts.append(f"{col}={val}")
-    
-    return filtered_df, "、".join(filter_desc_parts) if filter_desc_parts else None
 
 def precompute_stats(df, value_col, agg_func):
     """工具准确计算各项统计"""
@@ -382,6 +409,38 @@ def generate_ai_insight(query, df, stats, analysis_summary, filter_desc):
     
     return call_deepseek(prompt)
 
+def generate_dynamic_example(df):
+    """动态生成示例提示"""
+    text_cols = df.select_dtypes(include=['object']).columns.tolist()
+    numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+    
+    if not text_cols or not numeric_cols:
+        return "💡 试试：「给我建议」"
+    
+    # 获取第一个文本列和第一个数值列
+    sample_col = text_cols[0]
+    sample_num = numeric_cols[0]
+    
+    # 获取该列的前两个非空值
+    unique_vals = df[sample_col].dropna().unique().tolist()
+    val1 = unique_vals[0] if len(unique_vals) > 0 else "示例"
+    val2 = unique_vals[1] if len(unique_vals) > 1 else ""
+    
+    # 判断数值字段类型
+    num_lower = sample_num.lower()
+    if '年龄' in num_lower or '单价' in num_lower or '价格' in num_lower or '时长' in num_lower:
+        # 平均值类型
+        if val2:
+            return f"💡 试试：「{sample_col}」「{val1}」「{val1}平均{sample_num}」「{val1}{val2}」「给我建议」"
+        else:
+            return f"💡 试试：「{sample_col}」「{val1}」「{val1}平均{sample_num}」「给我建议」"
+    else:
+        # 总额类型
+        if val2:
+            return f"💡 试试：「{sample_col}」「{val1}」「{val1}{sample_num}」「{val1}{val2}」「给我建议」"
+        else:
+            return f"💡 试试：「{sample_col}」「{val1}」「{val1}{sample_num}」「给我建议」"
+
 # ==================== 自定义 CSS ====================
 st.markdown(f"""
 <style>
@@ -533,15 +592,16 @@ if uploaded_file:
     # ==================== 输入区域 ====================
     st.markdown("---")
     
-    query = st.text_input("", placeholder="例如：「抖音」「抖音新用户」「抖音新用户付费」「给我建议」", label_visibility="collapsed")
+    query = st.text_input("", placeholder="例如：「部门」「人事行政部」「抖音新用户」「给我建议」", label_visibility="collapsed")
     analyze_btn = st.button("🚀 开始分析", type="primary")
     
-    # 简洁提示
-    st.caption("💡 试试：「抖音」「抖音新用户」「抖音新用户付费」「给我建议」")
+    # 动态生成示例提示
+    example_text = generate_dynamic_example(df)
+    st.caption(example_text)
     
     # ==================== 分析逻辑 ====================
     if analyze_btn and query:
-        # 检测多个筛选条件
+        # 检测多个筛选条件（按词拆分，精确匹配）
         filters = detect_filters_from_query(query, df)
         
         if filters:
