@@ -1,7 +1,7 @@
 """
 InsightFlow - 智能数据决策助手（最终版）
 作者：Tuotuo09
-功能：随便问+帮你分心+决策建议
+功能：精确匹配 + 按词拆分 + 多条件 AND 筛选 + 动态提示
 """
 
 import streamlit as st
@@ -292,6 +292,8 @@ def get_unit(value_col):
         return "岁"
     elif '单价' in col_lower or '价格' in col_lower or 'price' in col_lower:
         return "元"
+    elif '小时' in col_lower:
+        return "小时"
     elif '时长' in col_lower or '时间' in col_lower or 'duration' in col_lower:
         return "分钟"
     elif '天数' in col_lower or '天' in col_lower or 'days' in col_lower:
