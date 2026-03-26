@@ -1,7 +1,7 @@
 """
-InsightFlow - 智能数据决策助手（完整版）
+InsightFlow - 智能数据决策助手（通用版）
 作者：Tuotuo09
-功能：准确计算 + 智能筛选 + 图表展示 + AI 解读
+功能：自动适配任何 Excel 数据，智能分析 + 筛选 + 图表 + AI 解读
 """
 
 import streamlit as st
@@ -52,24 +52,16 @@ if 'filter_name' not in st.session_state:
     st.session_state.filter_name = None
 if 'filter_col' not in st.session_state:
     st.session_state.filter_col = None
-if 'channel_stats' not in st.session_state:
-    st.session_state.channel_stats = None
-if 'city_stats' not in st.session_state:
-    st.session_state.city_stats = None
-if 'type_stats' not in st.session_state:
-    st.session_state.type_stats = None
-if 'retention_stats' not in st.session_state:
-    st.session_state.retention_stats = None
+if 'group_stats' not in st.session_state:
+    st.session_state.group_stats = None
+if 'numeric_stats' not in st.session_state:
+    st.session_state.numeric_stats = None
 if 'ai_response' not in st.session_state:
     st.session_state.ai_response = None
-if 'total_users' not in st.session_state:
-    st.session_state.total_users = 0
-if 'pay_users' not in st.session_state:
-    st.session_state.pay_users = 0
-if 'pay_rate' not in st.session_state:
-    st.session_state.pay_rate = 0
-if 'total_amount' not in st.session_state:
-    st.session_state.total_amount = 0
+if 'total_rows' not in st.session_state:
+    st.session_state.total_rows = 0
+if 'total_columns' not in st.session_state:
+    st.session_state.total_columns = 0
 
 # ==================== DeepSeek API 配置 ====================
 DEEPSEEK_API_KEY = "sk-52bcbd3d232945828250c3a1408598ff"
@@ -141,159 +133,113 @@ def clean_dataframe(df):
             df[col] = df[col].fillna('')
     return df
 
-def detect_filter_from_query(query):
-    """从用户问题中提取筛选条件"""
-    # 渠道筛选
-    channels = ['抖音', '小红书', '微信', '应用商店', '官网']
-    for channel in channels:
-        if channel in query:
-            return "渠道来源", channel
+def detect_filter_from_query(query, df):
+    """从用户问题中提取筛选条件（通用版）"""
+    text_cols = df.select_dtypes(include=['object']).columns.tolist()
     
-    # 城市筛选
-    cities = ['一线', '新一线', '二线', '三线']
-    for city in cities:
-        if city in query:
-            return "城市等级", city
-    
-    # 用户类型筛选
-    user_types = ['活跃用户', '新用户', '沉睡用户', '流失用户']
-    for utype in user_types:
-        if utype in query:
-            return "用户类型", utype
-    
-    # 留存状态筛选
-    retention = ['高留存', '中留存', '低留存']
-    for r in retention:
-        if r in query:
-            return "留存状态", r
-    
+    # 遍历所有文本列，查找匹配的值
+    for col in text_cols:
+        unique_vals = df[col].dropna().unique().tolist()
+        for val in unique_vals:
+            if val and str(val) in query:
+                return col, str(val)
     return None, None
 
 def generate_filtered_chart(df, filter_col, filter_val):
-    """根据筛选条件生成对应图表"""
+    """根据筛选条件生成对应图表（通用版）"""
     try:
-        if filter_col == "渠道来源" and "累计付费金额" in df.columns:
-            channel_pay = df.groupby("渠道来源")["累计付费金额"].sum().reset_index()
-            if len(channel_pay) > 0:
-                fig = px.bar(channel_pay, x="渠道来源", y="累计付费金额", title=f"📊 {filter_val}渠道付费金额")
-                fig.update_traces(marker_color=PRIMARY_BLUE)
-                return fig
+        # 自动识别数值列
+        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+        # 排除 ID 类字段
+        id_keywords = ['id', '编号', '工号', '序号']
+        real_numeric_cols = [c for c in numeric_cols if not any(kw in c.lower() for kw in id_keywords)]
         
-        elif filter_col == "城市等级" and "累计付费金额" in df.columns:
-            city_pay = df.groupby("城市等级")["累计付费金额"].sum().reset_index()
-            if len(city_pay) > 0:
-                fig = px.bar(city_pay, x="城市等级", y="累计付费金额", title=f"🏙️ {filter_val}城市付费金额")
-                fig.update_traces(marker_color=PRIMARY_BLUE)
-                return fig
-        
-        elif filter_col == "用户类型" and "累计付费金额" in df.columns:
-            type_pay = df.groupby("用户类型")["累计付费金额"].sum().reset_index()
-            if len(type_pay) > 0:
-                fig = px.pie(type_pay, names="用户类型", values="累计付费金额", title=f"👥 {filter_val}用户付费分布")
-                fig.update_traces(marker=dict(colors=px.colors.sequential.Blues_r))
-                return fig
-        
-        elif filter_col == "留存状态" and "留存状态" in df.columns:
-            retention_count = df["留存状态"].value_counts().reset_index()
-            retention_count.columns = ["留存状态", "用户数"]
-            if len(retention_count) > 0:
-                fig = px.bar(retention_count, x="留存状态", y="用户数", title=f"💾 {filter_val}留存状态分布")
-                fig.update_traces(marker_color=PRIMARY_BLUE)
-                return fig
+        if real_numeric_cols:
+            value_col = real_numeric_cols[0]
+            group_col = filter_col
+            
+            if group_col in df.columns and value_col in df.columns:
+                grouped = df.groupby(group_col)[value_col].sum().reset_index()
+                if len(grouped) > 0:
+                    fig = px.bar(grouped, x=group_col, y=value_col, title=f"📊 {filter_val} - {group_col}分布")
+                    fig.update_traces(marker_color=PRIMARY_BLUE)
+                    return fig
     except:
         pass
     return None
 
 def precompute_stats(df):
-    """工具准确计算各项统计"""
+    """工具准确计算各项统计（通用版）"""
     # 整体统计
-    total_users = len(df)
-    pay_users = len(df[df["是否付费"] == "是"]) if "是否付费" in df.columns else 0
-    total_amount = df["累计付费金额"].sum() if "累计付费金额" in df.columns else 0
-    pay_rate = round(pay_users / total_users * 100, 1) if total_users > 0 else 0
+    total_rows = len(df)
+    total_columns = len(df.columns)
     
-    # 渠道统计
-    channel_stats = None
-    if "渠道来源" in df.columns and "累计付费金额" in df.columns:
-        channel_data = []
-        for channel in df["渠道来源"].unique():
-            channel_df = df[df["渠道来源"] == channel]
-            pay_users_c = len(channel_df[channel_df["是否付费"] == "是"]) if "是否付费" in df.columns else 0
-            channel_data.append({
-                "渠道": channel,
-                "用户数": len(channel_df),
-                "付费用户数": pay_users_c,
-                "付费率": f"{round(pay_users_c/len(channel_df)*100,1)}%",
-                "总付费金额": round(channel_df["累计付费金额"].sum(), 0),
-                "人均付费": round(channel_df["累计付费金额"].mean(), 1)
-            })
-        channel_stats = pd.DataFrame(channel_data).sort_values("总付费金额", ascending=False)
+    # 自动识别数值列和文本列
+    numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+    text_cols = df.select_dtypes(include=['object']).columns.tolist()
     
-    # 城市统计
-    city_stats = None
-    if "城市等级" in df.columns and "累计付费金额" in df.columns:
-        city_data = []
-        for city in df["城市等级"].unique():
-            city_df = df[df["城市等级"] == city]
-            pay_users_c = len(city_df[city_df["是否付费"] == "是"]) if "是否付费" in df.columns else 0
-            city_data.append({
-                "城市等级": city,
-                "用户数": len(city_df),
-                "付费用户数": pay_users_c,
-                "人均付费": round(city_df["累计付费金额"].mean(), 1)
-            })
-        city_stats = pd.DataFrame(city_data).sort_values("用户数", ascending=False)
+    # 排除 ID 类字段
+    id_keywords = ['id', '编号', '工号', '序号', '用户id', '员工id']
+    real_numeric_cols = [c for c in numeric_cols if not any(kw in c.lower() for kw in id_keywords)]
     
-    # 用户类型统计
-    type_stats = None
-    if "用户类型" in df.columns and "累计付费金额" in df.columns:
-        type_data = []
-        for utype in df["用户类型"].unique():
-            type_df = df[df["用户类型"] == utype]
-            pay_users_c = len(type_df[type_df["是否付费"] == "是"]) if "是否付费" in df.columns else 0
-            type_data.append({
-                "用户类型": utype,
-                "用户数": len(type_df),
-                "付费用户数": pay_users_c,
-                "人均付费": round(type_df["累计付费金额"].mean(), 1)
-            })
-        type_stats = pd.DataFrame(type_data).sort_values("用户数", ascending=False)
+    # 如果没有数值列，用第一个文本列做计数统计
+    if not real_numeric_cols and text_cols:
+        group_stats = None
+        for col in text_cols[:1]:  # 只取第一个文本列
+            value_counts = df[col].value_counts().reset_index()
+            value_counts.columns = [col, "数量"]
+            group_stats = value_counts.sort_values("数量", ascending=False)
+    else:
+        # 按第一个文本列分组，统计第一个数值列
+        group_stats = None
+        if text_cols and real_numeric_cols:
+            group_col = text_cols[0]
+            value_col = real_numeric_cols[0]
+            grouped = df.groupby(group_col)[value_col].sum().reset_index()
+            grouped.columns = [group_col, value_col]
+            group_stats = grouped.sort_values(value_col, ascending=False)
     
-    # 留存统计
-    retention_stats = None
-    if "留存状态" in df.columns:
-        retention_data = []
-        for status in df["留存状态"].unique():
-            status_df = df[df["留存状态"] == status]
-            pay_users_c = len(status_df[status_df["是否付费"] == "是"]) if "是否付费" in df.columns else 0
-            retention_data.append({
-                "留存状态": status,
-                "用户数": len(status_df),
-                "付费用户数": pay_users_c,
-                "付费率": round(pay_users_c/len(status_df)*100, 1)
+    # 数值列统计
+    numeric_stats = None
+    if real_numeric_cols:
+        stats_data = []
+        for col in real_numeric_cols[:5]:  # 最多显示5个数值列
+            stats_data.append({
+                "字段": col,
+                "总和": round(df[col].sum(), 2),
+                "平均值": round(df[col].mean(), 2),
+                "最大值": df[col].max(),
+                "最小值": df[col].min()
             })
-        retention_stats = pd.DataFrame(retention_data).sort_values("用户数", ascending=False)
+        numeric_stats = pd.DataFrame(stats_data)
     
     return {
-        "total_users": total_users,
-        "pay_users": pay_users,
-        "pay_rate": pay_rate,
-        "total_amount": total_amount,
-        "channel_stats": channel_stats,
-        "city_stats": city_stats,
-        "type_stats": type_stats,
-        "retention_stats": retention_stats
+        "total_rows": total_rows,
+        "total_columns": total_columns,
+        "text_cols": text_cols,
+        "numeric_cols": real_numeric_cols,
+        "group_stats": group_stats,
+        "numeric_stats": numeric_stats
     }
 
 def generate_ai_insight(query, stats):
-    """生成 AI 洞察"""
+    """生成 AI 洞察（通用版）"""
     summary = f"用户问题：{query}\n\n"
-    summary += f"【整体情况】总用户{stats['total_users']}人，付费{stats['pay_users']}人，付费率{stats['pay_rate']}%，总金额{stats['total_amount']:.0f}元\n\n"
+    summary += f"【数据概况】共 {stats['total_rows']} 行，{stats['total_columns']} 列\n"
+    summary += f"【文本字段】{', '.join(stats['text_cols'][:5])}\n"
+    summary += f"【数值字段】{', '.join(stats['numeric_cols'][:5])}\n\n"
     
-    if stats['channel_stats'] is not None:
-        summary += "【渠道分析】\n"
-        for _, row in stats['channel_stats'].iterrows():
-            summary += f"- {row['渠道']}: {row['用户数']}人, 付费{row['付费用户数']}人, 总金额{row['总付费金额']:.0f}元\n"
+    if stats['group_stats'] is not None:
+        summary += "【分组统计】\n"
+        for _, row in stats['group_stats'].head(5).iterrows():
+            col1 = stats['group_stats'].columns[0]
+            col2 = stats['group_stats'].columns[1]
+            summary += f"- {row[col1]}: {row[col2]}\n"
+    
+    if stats['numeric_stats'] is not None:
+        summary += "\n【数值统计】\n"
+        for _, row in stats['numeric_stats'].head(3).iterrows():
+            summary += f"- {row['字段']}: 总和{row['总和']}, 平均{row['平均值']}\n"
     
     prompt = f"""基于以下准确数据，给出洞察和建议：
 
@@ -389,7 +335,7 @@ st.markdown("""
 <div style="text-align: center; margin-bottom: 32px;">
     <h1 class="title">✨ InsightFlow · 智能数据决策助手</h1>
     <p style="font-size: 18px; color: #666; margin-top: -8px;">
-        🤖 Built by Tuotuo09 · 准确计算 · 智能筛选 · AI 解读
+        🤖 Built by Tuotuo09 · 自动适配任何数据 · 智能分析 · AI 解读
     </p>
 </div>
 """, unsafe_allow_html=True)
@@ -416,14 +362,21 @@ if uploaded_file:
     
     # 问答区域
     st.markdown("---")
-    query = st.text_input("", placeholder="例如：各渠道付费情况｜抖音｜一线城市｜给我一些建议", label_visibility="collapsed")
+    query = st.text_input("", placeholder="例如：各品类销售情况｜技术部｜给我一些建议", label_visibility="collapsed")
     analyze_btn = st.button("🚀 开始分析", type="primary")
-    st.caption("💡 试试：各渠道付费情况 · 抖音 · 一线城市 · 活跃用户")
+    
+    # 动态示例问题
+    text_cols = df.select_dtypes(include=['object']).columns.tolist()
+    numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+    if text_cols and numeric_cols:
+        st.caption(f"💡 试试：{text_cols[0]}分布 · {numeric_cols[0]}前10 · {text_cols[0]} · 给我一些建议")
+    else:
+        st.caption("💡 试试：给我一些建议")
     
     # 分析逻辑
     if analyze_btn and query:
         # 检测筛选条件
-        filter_col, filter_val = detect_filter_from_query(query)
+        filter_col, filter_val = detect_filter_from_query(query, df)
         
         if filter_col and filter_val and filter_col in df.columns:
             display_df = df[df[filter_col] == filter_val]
@@ -441,27 +394,21 @@ if uploaded_file:
         st.session_state.filtered_df = display_df
         st.session_state.filter_name = filter_val
         st.session_state.filter_col = filter_col
-        st.session_state.channel_stats = stats['channel_stats']
-        st.session_state.city_stats = stats['city_stats']
-        st.session_state.type_stats = stats['type_stats']
-        st.session_state.retention_stats = stats['retention_stats']
-        st.session_state.total_users = stats['total_users']
-        st.session_state.pay_users = stats['pay_users']
-        st.session_state.pay_rate = stats['pay_rate']
-        st.session_state.total_amount = stats['total_amount']
+        st.session_state.group_stats = stats['group_stats']
+        st.session_state.numeric_stats = stats['numeric_stats']
+        st.session_state.total_rows = stats['total_rows']
+        st.session_state.total_columns = stats['total_columns']
         
         # 显示整体指标
         st.markdown("---")
         st.markdown("### 📈 整体指标")
-        col1, col2, col3, col4 = st.columns(4)
+        col1, col2, col3 = st.columns(3)
         with col1:
-            st.metric("总用户数", stats['total_users'])
+            st.metric("总行数", stats['total_rows'])
         with col2:
-            st.metric("付费用户数", stats['pay_users'])
+            st.metric("总列数", stats['total_columns'])
         with col3:
-            st.metric("付费率", f"{stats['pay_rate']}%")
-        with col4:
-            st.metric("总付费金额", f"{stats['total_amount']:.0f}元")
+            st.metric("数值列", len(stats['numeric_cols']))
         
         # 显示筛选图表
         if filter_col and filter_val:
@@ -469,24 +416,17 @@ if uploaded_file:
             if filter_fig:
                 st.plotly_chart(filter_fig, use_container_width=True)
         
-        # 显示统计表格
-        if stats['channel_stats'] is not None and len(stats['channel_stats']) > 0:
-            st.markdown("### 📊 渠道付费分析")
-            st.dataframe(stats['channel_stats'], use_container_width=True)
+        # 显示分组统计表格
+        if stats['group_stats'] is not None and len(stats['group_stats']) > 0:
+            col_name = stats['group_stats'].columns[0]
+            val_name = stats['group_stats'].columns[1]
+            st.markdown(f"### 📊 {col_name} 分布")
+            st.dataframe(stats['group_stats'], use_container_width=True)
         
-        col_left, col_right = st.columns(2)
-        with col_left:
-            if stats['city_stats'] is not None and len(stats['city_stats']) > 0:
-                st.markdown("### 🏙️ 城市等级分析")
-                st.dataframe(stats['city_stats'], use_container_width=True)
-        with col_right:
-            if stats['type_stats'] is not None and len(stats['type_stats']) > 0:
-                st.markdown("### 👥 用户类型分析")
-                st.dataframe(stats['type_stats'], use_container_width=True)
-        
-        if stats['retention_stats'] is not None and len(stats['retention_stats']) > 0:
-            st.markdown("### 💾 留存状态分析")
-            st.dataframe(stats['retention_stats'], use_container_width=True)
+        # 显示数值统计表格
+        if stats['numeric_stats'] is not None and len(stats['numeric_stats']) > 0:
+            st.markdown("### 🔢 数值字段统计")
+            st.dataframe(stats['numeric_stats'], use_container_width=True)
         
         # AI 智能洞察
         api_ok = check_api_availability()
@@ -545,38 +485,29 @@ if uploaded_file:
     elif st.session_state.has_result and not analyze_btn:
         st.markdown("---")
         st.markdown("### 📈 整体指标")
-        col1, col2, col3, col4 = st.columns(4)
+        col1, col2, col3 = st.columns(3)
         with col1:
-            st.metric("总用户数", st.session_state.total_users)
+            st.metric("总行数", st.session_state.total_rows)
         with col2:
-            st.metric("付费用户数", st.session_state.pay_users)
+            st.metric("总列数", st.session_state.total_columns)
         with col3:
-            st.metric("付费率", f"{st.session_state.pay_rate}%")
-        with col4:
-            st.metric("总付费金额", f"{st.session_state.total_amount:.0f}元")
+            numeric_count = len(st.session_state.current_df.select_dtypes(include=[np.number]).columns) if st.session_state.current_df is not None else 0
+            st.metric("数值列", numeric_count)
         
         if st.session_state.filter_col and st.session_state.filtered_df is not None:
             filter_fig = generate_filtered_chart(st.session_state.filtered_df, st.session_state.filter_col, st.session_state.filter_name)
             if filter_fig:
                 st.plotly_chart(filter_fig, use_container_width=True)
         
-        if st.session_state.channel_stats is not None and len(st.session_state.channel_stats) > 0:
-            st.markdown("### 📊 渠道付费分析")
-            st.dataframe(st.session_state.channel_stats, use_container_width=True)
+        if st.session_state.group_stats is not None and len(st.session_state.group_stats) > 0:
+            col_name = st.session_state.group_stats.columns[0]
+            val_name = st.session_state.group_stats.columns[1]
+            st.markdown(f"### 📊 {col_name} 分布")
+            st.dataframe(st.session_state.group_stats, use_container_width=True)
         
-        col_left, col_right = st.columns(2)
-        with col_left:
-            if st.session_state.city_stats is not None and len(st.session_state.city_stats) > 0:
-                st.markdown("### 🏙️ 城市等级分析")
-                st.dataframe(st.session_state.city_stats, use_container_width=True)
-        with col_right:
-            if st.session_state.type_stats is not None and len(st.session_state.type_stats) > 0:
-                st.markdown("### 👥 用户类型分析")
-                st.dataframe(st.session_state.type_stats, use_container_width=True)
-        
-        if st.session_state.retention_stats is not None and len(st.session_state.retention_stats) > 0:
-            st.markdown("### 💾 留存状态分析")
-            st.dataframe(st.session_state.retention_stats, use_container_width=True)
+        if st.session_state.numeric_stats is not None and len(st.session_state.numeric_stats) > 0:
+            st.markdown("### 🔢 数值字段统计")
+            st.dataframe(st.session_state.numeric_stats, use_container_width=True)
         
         if st.session_state.ai_response:
             st.markdown('<div class="ai-card">', unsafe_allow_html=True)
@@ -626,14 +557,14 @@ else:
     <div class="card" style="text-align: center;">
         <div style="font-size: 20px; margin-bottom: 16px;">🎯 上传你的数据，开始智能分析</div>
         <div style="display: flex; justify-content: center; gap: 24px; flex-wrap: wrap;">
-            <div>📊 渠道付费分析</div>
-            <div>🏙️ 城市等级分析</div>
-            <div>👥 用户类型分析</div>
-            <div>💾 留存状态分析</div>
+            <div>📊 自动识别字段</div>
+            <div>📈 智能统计分析</div>
+            <div>🔍 筛选查询</div>
+            <div>📉 自动图表</div>
             <div>🎯 AI 决策建议</div>
         </div>
         <div style="margin-top: 20px; font-size: 14px; color: #888;">
-            💡 试试：「各渠道付费情况」「抖音」「一线城市」「给我一些建议」
+            💡 支持任何 Excel/CSV 数据（人事、销售、财务、用户分析...）
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -642,7 +573,7 @@ else:
 st.markdown("---")
 st.markdown("""
 <div style="text-align: center; font-size: 12px; color: #888;">
-    ⚡ Made with ☕ by Tuotuo09 · 准确计算 · 智能筛选 · AI 解读<br>
+    ⚡ Made with ☕ by Tuotuo09 · 自动适配任何数据 · AI 智能解读<br>
     🔒 数据本地处理 · 只发送统计结果
 </div>
 """, unsafe_allow_html=True)
