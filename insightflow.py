@@ -1,8 +1,8 @@
 """
-InsightFlow - 智能数据决策助手（最终修复版）
+InsightFlow - 智能数据决策助手（最终版）
 作者：Tuotuo09
 功能：智能筛选 + 智能字段识别 + 通用数据分析
-修复：AI洞察跟随筛选、单位显示正确
+修复：AI洞察跟随筛选、单位显示正确、筛选后总额正确
 """
 
 import streamlit as st
@@ -278,12 +278,22 @@ def generate_analysis_summary(stats, filter_name):
     summary = ""
     
     if filter_name:
+        # 有筛选条件时，从 numeric_stats 获取总额
         summary += f"• {filter_name}共有 {stats['total_rows']} 条记录\n"
         
-        if agg_func == "mean":
-            summary += f"• 平均{value_col}：{stats['group_stats'].iloc[0][value_col]:.1f}{unit}\n"
+        # 获取总额
+        total_val = 0
+        if stats['numeric_stats'] is not None:
+            for _, row in stats['numeric_stats'].iterrows():
+                if row['字段'] == value_col:
+                    total_val = row['总和']
+                    break
+        
+        if agg_func == "mean" or total_val == 0:
+            # 如果是平均值类型，从 group_stats 取
+            avg_val = stats['group_stats'].iloc[0][value_col]
+            summary += f"• 平均{value_col}：{avg_val:.1f}{unit}\n"
         else:
-            total_val = stats['group_stats'].iloc[0][value_col]
             avg_val = total_val / stats['total_rows'] if stats['total_rows'] > 0 else 0
             summary += f"• {value_col}总额：{total_val:,.0f}{unit}（人均 {avg_val:.0f}{unit}）\n"
         
@@ -301,6 +311,7 @@ def generate_analysis_summary(stats, filter_name):
                 summary += f"• 平均年龄：{avg_age:.1f} 岁\n"
     
     else:
+        # 无筛选条件时，显示整体分析
         summary += f"• 总记录数：{stats['total_rows']} 条\n"
         
         if stats['group_stats'] is not None and len(stats['group_stats']) > 0:
