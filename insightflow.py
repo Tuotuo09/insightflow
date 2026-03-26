@@ -1,7 +1,8 @@
 """
-InsightFlow - 智能数据决策助手（稳定版）
+InsightFlow - 智能数据决策助手（最终版）
 作者：Tuotuo09
-功能：智能分析 + 决策建议
+功能：自动适配任何数据，智能筛选，AI 深度分析
+布局：上传区 → 输入区 → 分析结果 → AI 洞察 → 数据明细&图表
 """
 
 import streamlit as st
@@ -9,8 +10,6 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
-import re
-import json
 import requests
 import random
 
@@ -62,6 +61,8 @@ if 'total_rows' not in st.session_state:
     st.session_state.total_rows = 0
 if 'total_columns' not in st.session_state:
     st.session_state.total_columns = 0
+if 'analysis_summary' not in st.session_state:
+    st.session_state.analysis_summary = ""
 
 # ==================== DeepSeek API 配置 ====================
 DEEPSEEK_API_KEY = "sk-52bcbd3d232945828250c3a1408598ff"
@@ -134,7 +135,7 @@ def clean_dataframe(df):
     return df
 
 def detect_filter_from_query(query, df):
-    """从用户问题中提取筛选条件（通用版）"""
+    """从用户问题中提取筛选条件"""
     text_cols = df.select_dtypes(include=['object']).columns.tolist()
     
     for col in text_cols:
@@ -144,41 +145,22 @@ def detect_filter_from_query(query, df):
                 return col, str(val)
     return None, None
 
-def generate_filtered_chart(df, filter_col, filter_val):
-    """根据筛选条件生成对应图表（通用版）"""
-    try:
-        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-        id_keywords = ['id', '编号', '工号', '序号']
-        real_numeric_cols = [c for c in numeric_cols if not any(kw in c.lower() for kw in id_keywords)]
-        
-        if real_numeric_cols:
-            value_col = real_numeric_cols[0]
-            text_cols = df.select_dtypes(include=['object']).columns.tolist()
-            if text_cols:
-                group_col = text_cols[0]
-                if group_col in df.columns and value_col in df.columns:
-                    grouped = df.groupby(group_col)[value_col].sum().reset_index()
-                    if len(grouped) > 0:
-                        fig = px.bar(grouped, x=group_col, y=value_col, title=f"📊 {filter_val} - {group_col}分布")
-                        fig.update_traces(marker_color=PRIMARY_BLUE)
-                        return fig
-    except:
-        pass
-    return None
-
 def precompute_stats(df):
-    """工具准确计算各项统计（通用版）"""
+    """工具准确计算各项统计"""
     total_rows = len(df)
     total_columns = len(df.columns)
     
     numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
     text_cols = df.select_dtypes(include=['object']).columns.tolist()
     
+    # 排除 ID 类字段
     id_keywords = ['id', '编号', '工号', '序号', '用户id', '员工id']
     real_numeric_cols = [c for c in numeric_cols if not any(kw in c.lower() for kw in id_keywords)]
     
     # 分组统计（自动取第一个文本列和第一个数值列）
     group_stats = None
+    group_col = None
+    value_col = None
     if text_cols and real_numeric_cols:
         group_col = text_cols[0]
         value_col = real_numeric_cols[0]
@@ -207,43 +189,73 @@ def precompute_stats(df):
         "numeric_cols": real_numeric_cols,
         "group_stats": group_stats,
         "numeric_stats": numeric_stats,
-        "group_col": text_cols[0] if text_cols else None,
-        "value_col": real_numeric_cols[0] if real_numeric_cols else None
+        "group_col": group_col,
+        "value_col": value_col
     }
 
-def generate_ai_insight(query, stats):
-    """生成 AI 洞察（发送完整数据）"""
-    summary = f"用户问题：{query}\n\n"
-    summary += f"【数据概况】共 {stats['total_rows']} 行，{stats['total_columns']} 列\n"
-    summary += f"【文本字段】{', '.join(stats['text_cols'][:10])}\n"
-    summary += f"【数值字段】{', '.join(stats['numeric_cols'][:10])}\n\n"
+def generate_analysis_summary(stats):
+    """生成分析结果文字总结（基于数据的事实）"""
+    if stats['group_stats'] is None or len(stats['group_stats']) == 0:
+        return "数据中没有找到可分析的字段。"
     
+    group_col = stats['group_col']
+    value_col = stats['value_col']
+    
+    # 规模
+    summary = f"1. 规模：数据包含{stats['total_rows']}条记录，涉及{len(stats['group_stats'])}个{group_col}。\n"
+    
+    # 数值特征（排名）
+    top3 = stats['group_stats'].head(3)
+    ranking = "、".join([f"{row[group_col]}（{row[value_col]:,.0f}）" for _, row in top3.iterrows()])
+    summary += f"2. 数值特征：{group_col}排名为：{ranking}。\n"
+    
+    # 分布情况
+    total = stats['group_stats'][value_col].sum()
+    if total > 0:
+        top1_name = top3.iloc[0][group_col]
+        top1_pct = top3.iloc[0][value_col] / total * 100
+        summary += f"3. 分布情况：{top1_name}占比最高（{top1_pct:.0f}%）。\n"
+    
+    # 关键发现
+    if len(stats['group_stats']) >= 2:
+        first = stats['group_stats'].iloc[0]
+        second = stats['group_stats'].iloc[1]
+        diff_pct = (first[value_col] - second[value_col]) / second[value_col] * 100 if second[value_col] > 0 else 0
+        summary += f"4. 关键发现：{first[group_col]}比{second[group_col]}高出{diff_pct:.0f}%，是主要贡献者。"
+    
+    return summary
+
+def generate_ai_insight(query, stats, analysis_summary, filter_name):
+    """生成 AI 智能洞察"""
+    # 构建发送给 AI 的数据
+    data_summary = f"用户问题：{query}\n\n"
+    
+    if filter_name:
+        data_summary += f"【筛选条件】当前分析的是「{filter_name}」的数据\n\n"
+    
+    data_summary += f"【分析结果】\n{analysis_summary}\n\n"
+    
+    # 添加分组统计数据
     if stats['group_stats'] is not None and len(stats['group_stats']) > 0:
         group_col = stats['group_col']
         value_col = stats['value_col']
-        summary += f"【{group_col} 分组统计（按 {value_col} 求和）】\n"
+        data_summary += f"【详细数据】\n"
         for _, row in stats['group_stats'].iterrows():
-            summary += f"- {row[group_col]}: {row[value_col]:.0f}\n"
+            data_summary += f"- {row[group_col]}: {row[value_col]:.0f}\n"
     
+    # 添加数值统计
     if stats['numeric_stats'] is not None and len(stats['numeric_stats']) > 0:
-        summary += "\n【所有数值字段统计】\n"
-        for _, row in stats['numeric_stats'].iterrows():
-            summary += f"- {row['字段']}: 总和{row['总和']:.0f}, 平均{row['平均值']:.1f}, 最大{row['最大值']}, 最小{row['最小值']}\n"
-    
-    summary += f"\n【关键摘要】\n"
-    summary += f"- 总记录数: {stats['total_rows']}\n"
-    
-    if stats['numeric_stats'] is not None and len(stats['numeric_stats']) > 0:
-        for _, row in stats['numeric_stats'].iterrows():
-            summary += f"- 平均{row['字段']}: {row['平均值']:.1f}\n"
+        data_summary += f"\n【数值统计】\n"
+        for _, row in stats['numeric_stats'].head(5).iterrows():
+            data_summary += f"- {row['字段']}: 平均{row['平均值']:.1f}, 总和{row['总和']:.0f}\n"
     
     prompt = f"""基于以下准确数据，给出洞察和建议：
 
-{summary}
+{data_summary}
 
-请按格式输出：
-【洞察】：（2-3点，基于数据发现的核心问题）
-【建议】：（分优先级：高/中/低，具体可执行）
+请按以下格式输出：
+【洞察】：（2-3点，基于数据发现的核心问题，包含问题诊断和风险识别）
+【建议】：（分高/中/低优先级，具体可执行）
 【趣味发现】：（一个有趣的数据洞察）"""
     
     return call_deepseek(prompt)
@@ -252,6 +264,7 @@ def generate_ai_insight(query, stats):
 st.markdown(f"""
 <style>
     .stApp {{ background-color: {BG_GRAY}; }}
+    
     .card {{
         background-color: white;
         border-radius: 16px;
@@ -260,6 +273,7 @@ st.markdown(f"""
         box-shadow: 0 2px 12px rgba(0,0,0,0.04);
         border: 1px solid #E5E7EB;
     }}
+    
     .title {{
         font-size: 48px;
         font-weight: 700;
@@ -268,6 +282,7 @@ st.markdown(f"""
         -webkit-text-fill-color: transparent;
         margin-bottom: 8px;
     }}
+    
     .stButton > button {{
         background: linear-gradient(135deg, {PRIMARY_BLUE}, {DARK_BLUE});
         color: white;
@@ -281,19 +296,27 @@ st.markdown(f"""
         transform: translateY(-2px);
         box-shadow: 0 4px 12px rgba(30,136,229,0.3);
     }}
+    
     .stTextInput > div > div > input {{
         border-radius: 40px;
         border: 2px solid #E5E7EB;
         padding: 12px 20px;
         font-size: 16px;
     }}
+    .stTextInput > div > div > input:focus {{
+        border-color: {PRIMARY_BLUE};
+        box-shadow: 0 0 0 2px rgba(30,136,229,0.1);
+    }}
+    
     .ai-card {{
         background: linear-gradient(135deg, {LIGHT_BLUE}, white);
         border-radius: 16px;
         padding: 20px;
         border-left: 4px solid {PRIMARY_BLUE};
         margin-top: 20px;
+        margin-bottom: 20px;
     }}
+    
     .mode-badge-ai {{
         background-color: #4CAF50;
         color: white;
@@ -303,6 +326,7 @@ st.markdown(f"""
         display: inline-block;
         margin-bottom: 16px;
     }}
+    
     [data-testid="stFileUploader"] > div:first-child {{
         background: linear-gradient(135deg, {PRIMARY_BLUE}, {DARK_BLUE});
         border-radius: 50px;
@@ -347,13 +371,28 @@ if uploaded_file:
     df = clean_dataframe(df)
     st.session_state.current_df = df
     
-    # 数据详情
+    # 显示文件名和删除按钮
+    col1, col2 = st.columns([6, 1])
+    with col1:
+        st.markdown(f"📄 {uploaded_file.name} ({(uploaded_file.size / 1024):.1f} KB)")
+    with col2:
+        if st.button("🗑️", key="delete_btn"):
+            st.session_state.has_result = False
+            st.session_state.filtered_df = None
+            st.session_state.current_df = None
+            st.session_state.group_stats = None
+            st.session_state.numeric_stats = None
+            st.session_state.ai_response = None
+            st.rerun()
+    
+    # 数据详情（可展开）
     with st.expander("📋 查看数据详情"):
         st.dataframe(df.head(100), use_container_width=True)
         st.caption(f"共 {len(df)} 行，{len(df.columns)} 列")
     
-    # 问答区域
+    # ==================== 输入区域 ====================
     st.markdown("---")
+    
     query = st.text_input("", placeholder="例如：给我一些建议 | 分析一下数据", label_visibility="collapsed")
     analyze_btn = st.button("🚀 开始分析", type="primary")
     
@@ -365,7 +404,7 @@ if uploaded_file:
     else:
         st.caption("💡 试试：给我一些建议")
     
-    # 分析逻辑
+    # ==================== 分析逻辑 ====================
     if analyze_btn and query:
         # 检测筛选条件
         filter_col, filter_val = detect_filter_from_query(query, df)
@@ -381,6 +420,9 @@ if uploaded_file:
         # 计算统计
         stats = precompute_stats(display_df)
         
+        # 生成分析结果总结
+        analysis_summary = generate_analysis_summary(stats)
+        
         # 保存到 session_state
         st.session_state.has_result = True
         st.session_state.filtered_df = display_df
@@ -390,146 +432,169 @@ if uploaded_file:
         st.session_state.numeric_stats = stats['numeric_stats']
         st.session_state.total_rows = stats['total_rows']
         st.session_state.total_columns = stats['total_columns']
+        st.session_state.analysis_summary = analysis_summary
+        st.session_state.group_col = stats['group_col']
+        st.session_state.value_col = stats['value_col']
         
-        # 显示整体指标
+        # ==================== 显示分析结果 ====================
         st.markdown("---")
-        st.markdown("### 📈 整体指标")
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("总行数", stats['total_rows'])
-        with col2:
-            st.metric("总列数", stats['total_columns'])
-        with col3:
-            st.metric("数值字段", len(stats['numeric_cols']))
+        st.markdown("### 📊 分析结果")
+        st.markdown(analysis_summary)
         
-        # 显示筛选图表
-        if filter_col and filter_val:
-            filter_fig = generate_filtered_chart(display_df, filter_col, filter_val)
-            if filter_fig:
-                st.plotly_chart(filter_fig, use_container_width=True)
-        
-        # 显示分组统计表格
-        if stats['group_stats'] is not None and len(stats['group_stats']) > 0:
-            group_col = stats['group_col']
-            value_col = stats['value_col']
-            st.markdown(f"### 📊 {group_col} 分布")
-            st.dataframe(stats['group_stats'], use_container_width=True)
-            
-            # 显示图表
-            fig = px.bar(stats['group_stats'], x=group_col, y=value_col, title=f"{group_col} 分布")
-            fig.update_traces(marker_color=PRIMARY_BLUE)
-            st.plotly_chart(fig, use_container_width=True)
-        
-        # 显示所有数值字段统计
-        if stats['numeric_stats'] is not None and len(stats['numeric_stats']) > 0:
-            st.markdown("### 🔢 所有数值字段统计")
-            st.dataframe(stats['numeric_stats'], use_container_width=True)
-        
-        # AI 智能洞察
+        # ==================== AI 智能洞察 ====================
         api_ok = check_api_availability()
         if api_ok:
             with st.spinner(random.choice(LOADING_MESSAGES)):
-                ai_response = generate_ai_insight(query, stats)
+                ai_response = generate_ai_insight(query, stats, analysis_summary, filter_val)
                 if ai_response:
                     st.session_state.ai_response = ai_response
-                    st.markdown('<div class="ai-card">', unsafe_allow_html=True)
                     st.markdown("### 🧠 Tuotuo's AI 智能洞察")
-                    st.markdown(ai_response)
-                    st.markdown('</div>', unsafe_allow_html=True)
+                    
+                    # 解析并显示
+                    if "【洞察】" in ai_response:
+                        parts = ai_response.split("【洞察】")
+                        if len(parts) > 1:
+                            insight_part = parts[1].split("【建议】")[0] if "【建议】" in parts[1] else parts[1]
+                            st.markdown(f"**🔍 洞察**\n{insight_part.strip()}")
+                    
+                    if "【建议】" in ai_response:
+                        rec_part = ai_response.split("【建议】")[1].split("【趣味发现】")[0] if "【趣味发现】" in ai_response else ai_response.split("【建议】")[1]
+                        st.markdown(f"\n**💡 建议**\n{rec_part.strip()}")
+                    
+                    if "【趣味发现】" in ai_response:
+                        fun_part = ai_response.split("【趣味发现】")[1]
+                        st.markdown(f"\n**✨ 趣味发现**\n{fun_part.strip()}")
+                else:
+                    st.warning("🤖 AI 服务繁忙，请稍后再试")
         else:
             st.warning("🤖 AI 服务暂不可用，请检查 API Key")
         
-        # 数据明细（分页）
-        st.markdown("---")
-        st.markdown(f"### 📋 数据明细（共 {len(display_df)} 条）")
+        # ==================== 数据明细 & 图表 ====================
+        if stats['group_stats'] is not None and len(stats['group_stats']) > 0:
+            st.markdown("---")
+            st.markdown("### 📊 数据明细 & 图表")
+            
+            col_left, col_right = st.columns([3, 2])
+            
+            with col_left:
+                st.markdown("**📋 数据明细**")
+                st.dataframe(stats['group_stats'], use_container_width=True)
+            
+            with col_right:
+                st.markdown("**📈 图表**")
+                group_col = stats['group_col']
+                value_col = stats['value_col']
+                fig = px.bar(stats['group_stats'], x=group_col, y=value_col, title=f"{group_col}分布")
+                fig.update_traces(marker_color=PRIMARY_BLUE)
+                fig.update_layout(
+                    title_font_size=14,
+                    paper_bgcolor='rgba(0,0,0,0)',
+                    plot_bgcolor='rgba(0,0,0,0)'
+                )
+                st.plotly_chart(fig, use_container_width=True)
         
-        rows_per_page = 10
-        total_pages = (len(display_df) + rows_per_page - 1) // rows_per_page
-        page_key = "data_page"
-        if page_key not in st.session_state:
-            st.session_state[page_key] = 1
-        
-        current_page = st.session_state[page_key]
-        start_idx = (current_page - 1) * rows_per_page
-        end_idx = min(start_idx + rows_per_page, len(display_df))
-        
-        st.dataframe(display_df.iloc[start_idx:end_idx], use_container_width=True)
-        
-        if total_pages > 1:
-            col1, col2, col3, col4, col5 = st.columns([1, 1, 2, 1, 1])
-            with col1:
-                if st.button("⏮️ 首页"):
-                    st.session_state[page_key] = 1
-                    st.rerun()
-            with col2:
-                if st.button("◀ 上一页"):
-                    if st.session_state[page_key] > 1:
-                        st.session_state[page_key] -= 1
+        # 数据明细分页（如果是筛选后的数据）
+        if len(display_df) > 0:
+            st.markdown("---")
+            st.markdown(f"### 📋 全部数据明细（共 {len(display_df)} 条）")
+            
+            rows_per_page = 10
+            total_pages = (len(display_df) + rows_per_page - 1) // rows_per_page
+            page_key = "data_page"
+            if page_key not in st.session_state:
+                st.session_state[page_key] = 1
+            
+            current_page = st.session_state[page_key]
+            start_idx = (current_page - 1) * rows_per_page
+            end_idx = min(start_idx + rows_per_page, len(display_df))
+            
+            st.dataframe(display_df.iloc[start_idx:end_idx], use_container_width=True)
+            
+            if total_pages > 1:
+                col1, col2, col3, col4, col5 = st.columns([1, 1, 2, 1, 1])
+                with col1:
+                    if st.button("⏮️ 首页"):
+                        st.session_state[page_key] = 1
                         st.rerun()
-            with col3:
-                st.markdown(f"<div style='text-align:center;'>第 {current_page} / {total_pages} 页</div>", unsafe_allow_html=True)
-            with col4:
-                if st.button("下一页 ▶"):
-                    if st.session_state[page_key] < total_pages:
-                        st.session_state[page_key] += 1
+                with col2:
+                    if st.button("◀ 上一页"):
+                        if st.session_state[page_key] > 1:
+                            st.session_state[page_key] -= 1
+                            st.rerun()
+                with col3:
+                    st.markdown(f"<div style='text-align:center;'>第 {current_page} / {total_pages} 页</div>", unsafe_allow_html=True)
+                with col4:
+                    if st.button("下一页 ▶"):
+                        if st.session_state[page_key] < total_pages:
+                            st.session_state[page_key] += 1
+                            st.rerun()
+                with col5:
+                    if st.button("⏭️ 末页"):
+                        st.session_state[page_key] = total_pages
                         st.rerun()
-            with col5:
-                if st.button("⏭️ 末页"):
-                    st.session_state[page_key] = total_pages
-                    st.rerun()
     
     elif analyze_btn and not query:
         st.warning("💡 请输入一个问题～")
     
-    # 显示上次结果
+    # 显示上次结果（翻页时保持）
     elif st.session_state.has_result and not analyze_btn:
         st.markdown("---")
-        st.markdown("### 📈 整体指标")
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("总行数", st.session_state.total_rows)
-        with col2:
-            st.metric("总列数", st.session_state.total_columns)
-        with col3:
-            numeric_count = len(st.session_state.current_df.select_dtypes(include=[np.number]).columns) if st.session_state.current_df is not None else 0
-            st.metric("数值列", numeric_count)
-        
-        if st.session_state.filter_col and st.session_state.filtered_df is not None:
-            filter_fig = generate_filtered_chart(st.session_state.filtered_df, st.session_state.filter_col, st.session_state.filter_name)
-            if filter_fig:
-                st.plotly_chart(filter_fig, use_container_width=True)
-        
-        if st.session_state.group_stats is not None and len(st.session_state.group_stats) > 0:
-            group_col = st.session_state.group_stats.columns[0]
-            value_col = st.session_state.group_stats.columns[1]
-            st.markdown(f"### 📊 {group_col} 分布")
-            st.dataframe(st.session_state.group_stats, use_container_width=True)
-            
-            fig = px.bar(st.session_state.group_stats, x=group_col, y=value_col, title=f"{group_col} 分布")
-            fig.update_traces(marker_color=PRIMARY_BLUE)
-            st.plotly_chart(fig, use_container_width=True)
-        
-        if st.session_state.numeric_stats is not None and len(st.session_state.numeric_stats) > 0:
-            st.markdown("### 🔢 所有数值字段统计")
-            st.dataframe(st.session_state.numeric_stats, use_container_width=True)
+        st.markdown("### 📊 分析结果")
+        st.markdown(st.session_state.analysis_summary)
         
         if st.session_state.ai_response:
-            st.markdown('<div class="ai-card">', unsafe_allow_html=True)
             st.markdown("### 🧠 Tuotuo's AI 智能洞察")
-            st.markdown(st.session_state.ai_response)
-            st.markdown('</div>', unsafe_allow_html=True)
+            response = st.session_state.ai_response
+            
+            if "【洞察】" in response:
+                parts = response.split("【洞察】")
+                if len(parts) > 1:
+                    insight_part = parts[1].split("【建议】")[0] if "【建议】" in parts[1] else parts[1]
+                    st.markdown(f"**🔍 洞察**\n{insight_part.strip()}")
+            
+            if "【建议】" in response:
+                rec_part = response.split("【建议】")[1].split("【趣味发现】")[0] if "【趣味发现】" in response else response.split("【建议】")[1]
+                st.markdown(f"\n**💡 建议**\n{rec_part.strip()}")
+            
+            if "【趣味发现】" in response:
+                fun_part = response.split("【趣味发现】")[1]
+                st.markdown(f"\n**✨ 趣味发现**\n{fun_part.strip()}")
+        
+        if st.session_state.group_stats is not None and len(st.session_state.group_stats) > 0:
+            st.markdown("---")
+            st.markdown("### 📊 数据明细 & 图表")
+            
+            col_left, col_right = st.columns([3, 2])
+            with col_left:
+                st.markdown("**📋 数据明细**")
+                st.dataframe(st.session_state.group_stats, use_container_width=True)
+            with col_right:
+                st.markdown("**📈 图表**")
+                group_col = st.session_state.group_stats.columns[0]
+                value_col = st.session_state.group_stats.columns[1]
+                fig = px.bar(st.session_state.group_stats, x=group_col, y=value_col, title=f"{group_col}分布")
+                fig.update_traces(marker_color=PRIMARY_BLUE)
+                fig.update_layout(
+                    title_font_size=14,
+                    paper_bgcolor='rgba(0,0,0,0)',
+                    plot_bgcolor='rgba(0,0,0,0)'
+                )
+                st.plotly_chart(fig, use_container_width=True)
         
         if st.session_state.filtered_df is not None:
             st.markdown("---")
-            st.markdown(f"### 📋 数据明细（共 {len(st.session_state.filtered_df)} 条）")
+            st.markdown(f"### 📋 全部数据明细（共 {len(st.session_state.filtered_df)} 条）")
+            
             rows_per_page = 10
             total_pages = (len(st.session_state.filtered_df) + rows_per_page - 1) // rows_per_page
             page_key = "data_page"
             if page_key not in st.session_state:
                 st.session_state[page_key] = 1
+            
             current_page = st.session_state[page_key]
             start_idx = (current_page - 1) * rows_per_page
             end_idx = min(start_idx + rows_per_page, len(st.session_state.filtered_df))
+            
             st.dataframe(st.session_state.filtered_df.iloc[start_idx:end_idx], use_container_width=True)
             
             if total_pages > 1:
