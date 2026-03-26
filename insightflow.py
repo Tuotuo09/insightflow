@@ -1,7 +1,7 @@
 """
-InsightFlow - 智能数据决策助手（最终修复版）
+InsightFlow - 智能数据决策助手（最终版）
 作者：Tuotuo09
-修复：上传区域默认文字隐藏、分析结果显示正确数值、年龄用平均值
+功能：智能筛选 + 智能字段识别 + 通用数据分析
 """
 
 import streamlit as st
@@ -150,8 +150,8 @@ def detect_filter_from_query(query, df):
                 return col, str(val)
     return None, None
 
-def auto_select_value_field(df, query):
-    """根据用户问题自动选择数值字段"""
+def detect_metric_from_query(query, df):
+    """从用户问题中提取分析指标"""
     numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
     
     # 排除 ID 类字段
@@ -161,33 +161,29 @@ def auto_select_value_field(df, query):
     if not real_numeric_cols:
         return None, "sum"
     
-    # 关键词映射
-    keywords = {
-        '金额付费销售额薪资收入': ['金额', '付费', '销售额', '薪资', '收入', 'amount', 'sales', 'salary', 'revenue'],
-        '年龄单价价格时长': ['年龄', '单价', '价格', '时长', '时间', 'age', 'price', 'duration'],
-        '数量人数次数天数': ['数量', '人数', '次数', '天数', 'count', 'number', 'times', 'days']
-    }
-    
-    # 根据用户问题匹配
     query_lower = query.lower()
     
-    # 先匹配具体字段
-    for col in real_numeric_cols:
-        col_lower = col.lower()
-        if '付费' in query_lower and ('付费' in col_lower or '金额' in col_lower):
-            return col, "sum"
-        if '年龄' in query_lower and '年龄' in col_lower:
-            return col, "mean"
-        if '活跃' in query_lower and ('活跃' in col_lower or '天数' in col_lower):
-            return col, "sum"
-        if '登录' in query_lower and ('登录' in col_lower or '次数' in col_lower):
-            return col, "sum"
+    # 关键词映射
+    keyword_map = [
+        (['付费', '金额', '消费', '支付', 'payment', 'amount', '销售额', '销售', '收入', '薪资', '工资'], 'sum'),
+        (['年龄', 'age'], 'mean'),
+        (['单价', '价格', 'price'], 'mean'),
+        (['时长', '时间', 'duration', 'time'], 'mean'),
+        (['活跃', '天数', '次数', '数量', 'active', 'days', 'times'], 'sum'),
+    ]
     
-    # 默认返回第一个数值列，并判断聚合方式
+    # 遍历关键词，匹配用户问题
+    for keywords, agg_func in keyword_map:
+        if any(kw in query_lower for kw in keywords):
+            for col in real_numeric_cols:
+                col_lower = col.lower()
+                if any(kw in col_lower for kw in keywords):
+                    return col, agg_func
+    
+    # 默认：返回第一个数值列，金额类用总和，其他用平均值
     default_col = real_numeric_cols[0]
     col_lower = default_col.lower()
     
-    # 判断聚合方式
     if any(kw in col_lower for kw in ['年龄', '单价', '价格', '时长']):
         agg_func = "mean"
     else:
@@ -249,8 +245,8 @@ def precompute_stats(df, value_col, agg_func):
         "agg_func": agg_func
     }
 
-def generate_analysis_summary(stats):
-    """生成分析结果文字总结（基于数据的事实）"""
+def generate_analysis_summary(stats, filter_name):
+    """生成分析结果文字总结"""
     if stats['group_stats'] is None or len(stats['group_stats']) == 0:
         return "数据中没有找到可分析的字段。"
     
@@ -264,38 +260,80 @@ def generate_analysis_summary(stats):
     else:
         unit = "（总和）"
     
-    # 规模
-    summary = f"1. 规模：数据包含{stats['total_rows']}条记录，涉及{len(stats['group_stats'])}个{group_col}。\n"
+    summary = ""
     
-    # 数值特征（排名）
-    top3 = stats['group_stats'].head(3)
-    if agg_func == "mean":
-        ranking = "、".join([f"{row[group_col]}（{row[value_col]:.1f}）" for _, row in top3.iterrows()])
+    # 如果有筛选条件
+    if filter_name:
+        # 单渠道分析
+        summary += f"• {filter_name}渠道共有 {stats['total_rows']} 名用户\n"
+        
+        # 找数值字段
+        if agg_func == "mean":
+            summary += f"• 平均{value_col}：{stats['group_stats'].iloc[0][value_col]:.1f}\n"
+        else:
+            total_val = stats['group_stats'].iloc[0][value_col]
+            avg_val = total_val / stats['total_rows'] if stats['total_rows'] > 0 else 0
+            summary += f"• {value_col}总额：{total_val:,.0f} 元（人均 {avg_val:.0f} 元）\n"
+        
+        # 找付费相关字段
+        pay_col = None
+        for col in stats['numeric_cols']:
+            if '付费' in col or '金额' in col:
+                pay_col = col
+                break
+        
+        if pay_col and pay_col != value_col:
+            pay_data = stats['numeric_stats'][stats['numeric_stats']['字段'] == pay_col]
+            if len(pay_data) > 0:
+                total_pay = pay_data['总和'].values[0]
+                avg_pay = pay_data['平均值'].values[0]
+                summary += f"• 付费总额：{total_pay:,.0f} 元（人均 {avg_pay:.0f} 元）\n"
+        
+        # 找活跃相关字段
+        active_col = None
+        for col in stats['numeric_cols']:
+            if '活跃' in col or '天数' in col:
+                active_col = col
+                break
+        
+        if active_col:
+            active_data = stats['numeric_stats'][stats['numeric_stats']['字段'] == active_col]
+            if len(active_data) > 0:
+                avg_active = active_data['平均值'].values[0]
+                summary += f"• 平均{active_col}：{avg_active:.1f} 天\n"
+        
+        # 找年龄字段
+        age_col = None
+        for col in stats['numeric_cols']:
+            if '年龄' in col or 'age' in col.lower():
+                age_col = col
+                break
+        
+        if age_col:
+            age_data = stats['numeric_stats'][stats['numeric_stats']['字段'] == age_col]
+            if len(age_data) > 0:
+                avg_age = age_data['平均值'].values[0]
+                summary += f"• 平均年龄：{avg_age:.1f} 岁\n"
+    
     else:
-        ranking = "、".join([f"{row[group_col]}（{row[value_col]:,.0f}）" for _, row in top3.iterrows()])
-    summary += f"2. 数值特征：{group_col}{unit}排名为：{ranking}。\n"
-    
-    # 分布情况
-    total = stats['group_stats'][value_col].sum() if agg_func != "mean" else len(stats['group_stats'])
-    if total > 0 and agg_func != "mean":
-        top1_name = top3.iloc[0][group_col]
-        top1_pct = top3.iloc[0][value_col] / total * 100
-        summary += f"3. 分布情况：{top1_name}占比最高（{top1_pct:.0f}%）。\n"
-    elif agg_func == "mean":
-        top1_name = top3.iloc[0][group_col]
-        top1_val = top3.iloc[0][value_col]
-        summary += f"3. 分布情况：{top1_name}平均值最高（{top1_val:.1f}）。\n"
-    
-    # 关键发现
-    if len(stats['group_stats']) >= 2:
-        first = stats['group_stats'].iloc[0]
-        second = stats['group_stats'].iloc[1]
-        if second[value_col] > 0:
-            diff_pct = (first[value_col] - second[value_col]) / second[value_col] * 100
-            if agg_func == "mean":
-                summary += f"4. 关键发现：{first[group_col]}比{second[group_col]}高出{diff_pct:.0f}%，是主要领先者。"
-            else:
-                summary += f"4. 关键发现：{first[group_col]}比{second[group_col]}高出{diff_pct:.0f}%，是主要贡献者。"
+        # 整体分析
+        summary += f"• 总用户数：{stats['total_rows']} 人\n"
+        
+        # 找数值字段排名
+        if stats['group_stats'] is not None and len(stats['group_stats']) > 0:
+            top3 = stats['group_stats'].head(3)
+            summary += f"• {group_col}排名："
+            for _, row in top3.iterrows():
+                if agg_func == "mean":
+                    summary += f"{row[group_col]}({row[value_col]:.1f}) "
+                else:
+                    summary += f"{row[group_col]}({row[value_col]:,.0f}) "
+            summary += "\n"
+            
+            # 找出最高和最低
+            first = stats['group_stats'].iloc[0]
+            last = stats['group_stats'].iloc[-1]
+            summary += f"• 最高：{first[group_col]}，最低：{last[group_col]}\n"
     
     return summary
 
@@ -329,8 +367,8 @@ def generate_ai_insight(query, stats, analysis_summary, filter_name):
 {data_summary}
 
 请按以下格式输出：
-【洞察】：（2-3点，基于数据发现的核心问题，包含问题诊断和风险识别）
-【建议】：（分高/中/低优先级，具体可执行）
+【洞察】：（2-3点，基于数据发现的核心问题）
+【建议】：（具体可执行）
 【趣味发现】：（一个有趣的数据洞察）"""
     
     return call_deepseek(prompt)
@@ -402,7 +440,7 @@ st.markdown(f"""
         margin-bottom: 16px;
     }}
     
-    /* 自定义上传按钮样式 */
+    /* 隐藏默认的上传提示文字 */
     [data-testid="stFileUploader"] > div:first-child {{
         background: linear-gradient(135deg, {PRIMARY_BLUE}, {DARK_BLUE});
         border-radius: 50px;
@@ -433,7 +471,6 @@ st.markdown(f"""
         font-size: 18px;
         font-weight: 600;
     }}
-    /* 隐藏默认的上传提示文字 */
     [data-testid="stFileUploader"] > div:first-child > div:first-child {{
         display: none;
     }}
@@ -479,7 +516,7 @@ if uploaded_file:
             st.session_state.ai_response = None
             st.rerun()
     
-    # 数据详情（可展开）
+    # 数据详情
     with st.expander("📋 查看数据详情"):
         st.dataframe(df.head(100), use_container_width=True)
         st.caption(f"共 {len(df)} 行，{len(df.columns)} 列")
@@ -487,16 +524,11 @@ if uploaded_file:
     # ==================== 输入区域 ====================
     st.markdown("---")
     
-    query = st.text_input("", placeholder="例如：给我一些建议 | 分析一下数据", label_visibility="collapsed")
+    query = st.text_input("", placeholder="例如：「抖音」「抖音付费」「给我建议」", label_visibility="collapsed")
     analyze_btn = st.button("🚀 开始分析", type="primary")
     
-    # 动态示例
-    text_cols = df.select_dtypes(include=['object']).columns.tolist()
-    numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-    if text_cols and numeric_cols:
-        st.caption(f"💡 试试：给我一些建议 · {text_cols[0]}分布 · 筛选条件会自动识别")
-    else:
-        st.caption("💡 试试：给我一些建议")
+    # 简洁提示
+    st.caption("💡 试试：「抖音」「抖音付费」「给我建议」")
     
     # ==================== 分析逻辑 ====================
     if analyze_btn and query:
@@ -511,14 +543,14 @@ if uploaded_file:
             filter_col = None
             filter_val = None
         
-        # 自动选择数值字段和聚合方式
-        value_col, agg_func = auto_select_value_field(display_df, query)
+        # 检测分析指标
+        value_col, agg_func = detect_metric_from_query(query, display_df)
         
         # 计算统计
         stats = precompute_stats(display_df, value_col, agg_func)
         
         # 生成分析结果总结
-        analysis_summary = generate_analysis_summary(stats)
+        analysis_summary = generate_analysis_summary(stats, filter_val)
         
         # 保存到 session_state
         st.session_state.has_result = True
@@ -633,7 +665,7 @@ if uploaded_file:
     elif analyze_btn and not query:
         st.warning("💡 请输入一个问题～")
     
-    # 显示上次结果（翻页时保持）
+    # 显示上次结果
     elif st.session_state.has_result and not analyze_btn:
         st.markdown("---")
         st.markdown("### 📊 分析结果")
