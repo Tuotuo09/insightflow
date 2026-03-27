@@ -560,7 +560,7 @@ st.markdown(f"""
         margin-bottom: 16px;
     }}
     
-    /* 隐藏默认的上传提示文字 */
+    /* 自定义上传按钮样式 */
     [data-testid="stFileUploader"] > div:first-child {{
         background: linear-gradient(135deg, {PRIMARY_BLUE}, {DARK_BLUE});
         border-radius: 50px;
@@ -591,14 +591,6 @@ st.markdown(f"""
         font-size: 18px;
         font-weight: 600;
     }}
-    /* 隐藏默认的上传提示文字 */
-    [data-testid="stFileUploader"] > div:first-child > div:first-child {{
-        display: none;
-    }}
-    /* 隐藏默认的文件名显示 */
-    [data-testid="stFileUploader"] > div:first-child > div:last-child {{
-        display: none;
-    }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -626,20 +618,6 @@ if uploaded_file:
     
     df = clean_dataframe(df)
     st.session_state.current_df = df
-    
-    # 显示文件名和删除按钮
-    col1, col2 = st.columns([6, 1])
-    with col1:
-        st.markdown(f"📄 {uploaded_file.name} ({(uploaded_file.size / 1024):.1f} KB)")
-    with col2:
-        if st.button("🗑️", key="delete_btn"):
-            st.session_state.has_result = False
-            st.session_state.filtered_df = None
-            st.session_state.current_df = None
-            st.session_state.group_stats = None
-            st.session_state.numeric_stats = None
-            st.session_state.ai_response = None
-            st.rerun()
     
     # 数据详情
     with st.expander("📋 查看数据详情"):
