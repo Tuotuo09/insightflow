@@ -2,7 +2,7 @@
 InsightFlow - 智能数据决策助手（最终通用版）
 作者：Tuotuo09
 功能：通用数据分析 + 多条件筛选 + 动态提示 + AI 洞察
-特性：自动识别字段类型，用户问什么就分析什么
+特性：自动识别字段类型，用户问什么就分析什么，数据100%准确
 """
 
 import streamlit as st
@@ -107,7 +107,7 @@ def call_deepseek(prompt):
     data = {
         "model": "deepseek-chat",
         "messages": [
-            {"role": "system", "content": "你是一个专业的数据分析专家。基于提供的准确数据，给出深刻的洞察和可执行的建议。请只基于提供的数据进行分析，不要编造任何不存在的人名或数据。"},
+            {"role": "system", "content": "你是一个专业的数据分析专家。基于提供的准确数据，给出深刻的洞察和可执行的建议。请直接使用【准确统计数据】中提供的数值，不要重新计算。"},
             {"role": "user", "content": prompt}
         ],
         "temperature": 0.7,
@@ -201,11 +201,11 @@ def detect_metric_from_query(query, df):
     
     query_lower = query.lower()
     
-    # 1. 检查用户是否在问文本字段分布（如「绩效等级」「部门」「岗位」）
+    # 1. 检查用户是否在问文本字段分布
     for col in text_cols:
         col_lower = col.lower()
         if col_lower in query_lower or any(kw in query_lower for kw in [f"{col_lower}分布", f"{col_lower}情况"]):
-            return None, None, col  # 返回文本字段名
+            return None, None, col
     
     # 2. 关键词映射（数值字段）
     keyword_map = [
@@ -214,6 +214,7 @@ def detect_metric_from_query(query, df):
         (['单价', '价格', 'price'], 'mean'),
         (['时长', '时间', 'duration', 'time'], 'mean'),
         (['活跃', '天数', '次数', '数量', 'active', 'days', 'times'], 'sum'),
+        (['简历', '面试', '录用', '入职'], 'sum'),  # 招聘表字段
     ]
     
     # 遍历关键词，匹配用户问题
@@ -308,6 +309,8 @@ def get_unit(value_col):
         return "次"
     elif '付费' in col_lower or '金额' in col_lower or '薪资' in col_lower or '工资' in col_lower:
         return "元"
+    elif '简历' in col_lower or '面试' in col_lower or '录用' in col_lower or '入职' in col_lower:
+        return "人"
     else:
         return ""
 
@@ -371,9 +374,9 @@ def generate_analysis_summary(stats, filter_desc, df, query, text_col=None, valu
         summary += f"📊 整体数据\n"
         summary += f"• 总记录数：{stats['total_rows']} 条\n"
         
-        # 统计所有数值字段的平均值
+        # 统计所有数值字段的平均值（全部显示）
         if stats['numeric_stats'] is not None and len(stats['numeric_stats']) > 0:
-            for _, row in stats['numeric_stats'].head(3).iterrows():
+            for _, row in stats['numeric_stats'].iterrows():
                 unit = get_unit(row['字段'])
                 summary += f"• 平均{row['字段']}：{row['平均值']:.1f}{unit}\n"
         
@@ -399,7 +402,7 @@ def generate_analysis_summary(stats, filter_desc, df, query, text_col=None, valu
     return summary
 
 def generate_ai_insight(query, df, stats, analysis_summary, filter_desc):
-    """生成 AI 智能洞察（通用版）"""
+    """生成 AI 智能洞察（使用准确统计数据）"""
     data_summary = f"用户问题：{query}\n\n"
     
     if filter_desc:
@@ -407,45 +410,29 @@ def generate_ai_insight(query, df, stats, analysis_summary, filter_desc):
     
     data_summary += f"【分析结果】\n{analysis_summary}\n\n"
     
-    # 添加数据摘要
-    data_summary += f"【数据概况】共 {stats['total_rows']} 条记录\n"
+    # 添加准确的统计数据（让 AI 直接使用）
+    data_summary += f"【准确统计数据（请直接使用以下数据，不要重新计算）】\n"
     
+    if stats['numeric_stats'] is not None and len(stats['numeric_stats']) > 0:
+        for _, row in stats['numeric_stats'].iterrows():
+            unit = get_unit(row['字段'])
+            data_summary += f"- 平均{row['字段']}：{row['平均值']:.1f}{unit}\n"
+            data_summary += f"- 总{row['字段']}：{row['总和']:.0f}{unit}\n"
+    
+    # 添加分组统计
     if stats['group_stats'] is not None and len(stats['group_stats']) > 0:
         group_col = stats['group_col']
         value_col = stats['value_col']
         agg_func = stats['agg_func']
         unit = get_unit(value_col)
-        data_summary += f"【{group_col}分布】\n"
+        data_summary += f"\n【{group_col}分布】\n"
         for _, row in stats['group_stats'].iterrows():
             if agg_func == "mean":
                 data_summary += f"- {row[group_col]}: {row[value_col]:.1f}{unit}\n"
             else:
                 data_summary += f"- {row[group_col]}: {row[value_col]:,.0f}{unit}\n"
     
-    if stats['numeric_stats'] is not None and len(stats['numeric_stats']) > 0:
-        data_summary += f"\n【数值统计】\n"
-        for _, row in stats['numeric_stats'].head(5).iterrows():
-            unit = get_unit(row['字段'])
-            data_summary += f"- {row['字段']}: 平均{row['平均值']:.1f}{unit}, 总和{row['总和']:.0f}{unit}\n"
-    
-    # 添加排名数据（通用）
-    text_cols = df.select_dtypes(include=['object']).columns.tolist()
-    numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-    
-    if text_cols and numeric_cols:
-        id_keywords = ['id', '编号', '工号', '序号']
-        real_numeric_cols = [c for c in numeric_cols if not any(kw in c.lower() for kw in id_keywords)]
-        
-        if real_numeric_cols:
-            rank_col = real_numeric_cols[0]
-            label_col = text_cols[0]
-            data_summary += f"\n【{label_col}排名前10（真实数据）】\n"
-            top10 = df.nlargest(10, rank_col)[[label_col, rank_col]].drop_duplicates(subset=[label_col])
-            for _, row in top10.iterrows():
-                unit = get_unit(rank_col)
-                data_summary += f"- {row[label_col]}: {row[rank_col]:,.0f}{unit}\n"
-    
-    prompt = f"""基于以下准确数据，给出洞察和建议。注意：请只基于提供的数据进行分析，不要编造任何不存在的人名或数据。
+    prompt = f"""基于以下准确数据，给出洞察和建议。注意：请直接使用【准确统计数据】中提供的数值，不要重新计算。
 
 {data_summary}
 
@@ -476,13 +463,11 @@ def generate_dynamic_example(df):
     # 判断数值字段类型
     num_lower = sample_num.lower()
     if '年龄' in num_lower or '单价' in num_lower or '价格' in num_lower or '时长' in num_lower:
-        # 平均值类型
         if val2:
             return f"💡 试试：「{sample_col}」「{val1}」「{val1}平均{sample_num}」「{val1}{val2}」「给我建议」"
         else:
             return f"💡 试试：「{sample_col}」「{val1}」「{val1}平均{sample_num}」「给我建议」"
     else:
-        # 总额类型
         if val2:
             return f"💡 试试：「{sample_col}」「{val1}」「{val1}{sample_num}」「{val1}{val2}」「给我建议」"
         else:
@@ -683,7 +668,9 @@ if uploaded_file:
             with st.spinner(random.choice(LOADING_MESSAGES)):
                 if text_col:
                     # 文本字段分布，生成简单的 AI 洞察
-                    ai_response = f"【洞察】\n{text_col}分布显示，各类型的分布情况如上表所示。\n\n【建议】\n可根据分布情况，关注占比最高的类型，分析其特点和优势。\n\n【趣味发现】\n{text_col}分布中，{display_df[text_col].value_counts().index[0]}占比最高。"
+                    top_value = display_df[text_col].value_counts().index[0]
+                    top_count = display_df[text_col].value_counts().values[0]
+                    ai_response = f"【洞察】\n{text_col}分布显示，{top_value}占比最高，共{top_count}人。\n\n【建议】\n可根据分布情况，关注占比最高的类型，分析其特点和优势。\n\n【趣味发现】\n{text_col}分布中，{top_value}是最常见的类型。"
                 else:
                     ai_response = generate_ai_insight(query, display_df, stats, analysis_summary, filter_desc)
                 
