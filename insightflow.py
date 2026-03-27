@@ -1,8 +1,8 @@
 """
-InsightFlow - 智能数据决策助手（最终通用版）
+InsightFlow - 智能数据决策助手（最终版）
 作者：Tuotuo09
 功能：通用数据分析 + 多条件筛选 + 动态提示 + AI 洞察
-特性：自动识别字段类型，用户问什么就分析什么，数据100%准确
+修复：渠道排名显示错误、平均面试数错误
 """
 
 import streamlit as st
@@ -213,8 +213,8 @@ def detect_metric_from_query(query, df):
         (['年龄', 'age'], 'mean'),
         (['单价', '价格', 'price'], 'mean'),
         (['时长', '时间', 'duration', 'time'], 'mean'),
-        (['活跃', '天数', '次数', '数量', 'active', 'days', 'times'], 'sum'),
-        (['简历', '面试', '录用', '入职'], 'sum'),  # 招聘表字段
+        (['活跃', '天数', '次数', '数量', 'active', 'days', 'times'], 'mean'),
+        (['简历', '面试', '录用', '入职'], 'sum'),
     ]
     
     # 遍历关键词，匹配用户问题
@@ -392,12 +392,15 @@ def generate_analysis_summary(stats, filter_desc, df, query, text_col=None, valu
             if real_numeric_cols:
                 rank_col = real_numeric_cols[0]
                 label_col = text_cols[0]
+                unit = get_unit(rank_col)
                 
-                summary += f"\n📈 {label_col}排名（前10）\n"
-                top10 = df.nlargest(10, rank_col)[[label_col, rank_col]].drop_duplicates(subset=[label_col])
-                for _, row in top10.iterrows():
-                    unit = get_unit(rank_col)
-                    summary += f"• {row[label_col]}：{row[rank_col]:,.0f}{unit}\n"
+                # 计算各分组的平均值（更合理）
+                grouped_mean = df.groupby(label_col)[rank_col].mean().sort_values(ascending=False).reset_index()
+                grouped_mean.columns = [label_col, rank_col]
+                
+                summary += f"\n📈 {label_col}排名（按平均{rank_col}）\n"
+                for _, row in grouped_mean.head(10).iterrows():
+                    summary += f"• {row[label_col]}：{row[rank_col]:.1f}{unit}\n"
     
     return summary
 
