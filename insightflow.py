@@ -1,8 +1,8 @@
 """
-InsightFlow - 智能数据决策助手（最终版）
+InsightFlow - 智能数据决策助手（最终通用版）
 作者：Tuotuo09
-功能：精确匹配 + 按词拆分 + 多条件 AND 筛选 + 动态提示 + 全面分析结果
-修复：姓名幻觉问题（排名时使用员工ID+姓名确保唯一性）
+功能：通用数据分析 + 多条件筛选 + 动态提示 + AI 洞察
+特性：自动识别字段类型，用户问什么就分析什么
 """
 
 import streamlit as st
@@ -107,7 +107,7 @@ def call_deepseek(prompt):
     data = {
         "model": "deepseek-chat",
         "messages": [
-            {"role": "system", "content": "你是一个专业的数据分析专家。基于提供的准确数据，给出深刻的洞察和可执行的建议。"},
+            {"role": "system", "content": "你是一个专业的数据分析专家。基于提供的准确数据，给出深刻的洞察和可执行的建议。请只基于提供的数据进行分析，不要编造任何不存在的人名或数据。"},
             {"role": "user", "content": prompt}
         ],
         "temperature": 0.7,
@@ -191,19 +191,23 @@ def apply_filters(df, filters):
     return filtered_df, "、".join(filter_desc_parts) if filter_desc_parts else None
 
 def detect_metric_from_query(query, df):
-    """从用户问题中提取分析指标"""
+    """从用户问题中提取分析指标（通用版）"""
     numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+    text_cols = df.select_dtypes(include=['object']).columns.tolist()
     
     # 排除 ID 类字段
     id_keywords = ['id', '编号', '工号', '序号', '用户id', '员工id']
     real_numeric_cols = [c for c in numeric_cols if not any(kw in c.lower() for kw in id_keywords)]
     
-    if not real_numeric_cols:
-        return None, "sum"
-    
     query_lower = query.lower()
     
-    # 关键词映射
+    # 1. 检查用户是否在问文本字段分布（如「绩效等级」「部门」「岗位」）
+    for col in text_cols:
+        col_lower = col.lower()
+        if col_lower in query_lower or any(kw in query_lower for kw in [f"{col_lower}分布", f"{col_lower}情况"]):
+            return None, None, col  # 返回文本字段名
+    
+    # 2. 关键词映射（数值字段）
     keyword_map = [
         (['付费', '金额', '消费', '支付', 'payment', 'amount', '销售额', '销售', '收入', '薪资', '工资'], 'sum'),
         (['年龄', 'age'], 'mean'),
@@ -218,18 +222,19 @@ def detect_metric_from_query(query, df):
             for col in real_numeric_cols:
                 col_lower = col.lower()
                 if any(kw in col_lower for kw in keywords):
-                    return col, agg_func
+                    return col, agg_func, None
     
-    # 默认：返回第一个数值列
-    default_col = real_numeric_cols[0]
-    col_lower = default_col.lower()
+    # 3. 默认：返回第一个数值列
+    default_col = real_numeric_cols[0] if real_numeric_cols else None
+    if default_col:
+        col_lower = default_col.lower()
+        if any(kw in col_lower for kw in ['年龄', '单价', '价格', '时长']):
+            agg_func = "mean"
+        else:
+            agg_func = "sum"
+        return default_col, agg_func, None
     
-    if any(kw in col_lower for kw in ['年龄', '单价', '价格', '时长']):
-        agg_func = "mean"
-    else:
-        agg_func = "sum"
-    
-    return default_col, agg_func
+    return None, None, None
 
 def precompute_stats(df, value_col, agg_func):
     """工具准确计算各项统计"""
@@ -306,15 +311,38 @@ def get_unit(value_col):
     else:
         return ""
 
-def generate_analysis_summary(stats, filter_desc, df):
-    """生成分析结果文字总结（修复姓名幻觉）"""
+def generate_text_distribution(df, text_col, filter_desc):
+    """生成文本字段的分布统计"""
+    value_counts = df[text_col].value_counts().reset_index()
+    value_counts.columns = [text_col, "数量"]
+    
+    summary = ""
+    if filter_desc:
+        summary += f"📊 {text_col}分布（{filter_desc}）\n"
+    else:
+        summary += f"📊 {text_col}分布\n"
+    
+    for _, row in value_counts.iterrows():
+        summary += f"• {row[text_col]}：{row['数量']}人\n"
+    
+    return summary, value_counts
+
+def generate_analysis_summary(stats, filter_desc, df, query, text_col=None, value_col=None, agg_func=None):
+    """生成分析结果文字总结（通用版）"""
+    
+    # 如果用户问的是文本字段分布
+    if text_col and text_col in df.columns:
+        summary, _ = generate_text_distribution(df, text_col, filter_desc)
+        return summary
+    
+    # 否则处理数值字段
     if stats['group_stats'] is None or len(stats['group_stats']) == 0:
         return "数据中没有找到可分析的字段。"
     
     group_col = stats['group_col']
-    value_col = stats['value_col']
-    agg_func = stats['agg_func']
-    unit = get_unit(value_col)
+    value = stats['value_col'] if value_col is None else value_col
+    agg = stats['agg_func'] if agg_func is None else agg_func
+    unit = get_unit(value)
     
     summary = ""
     
@@ -327,102 +355,51 @@ def generate_analysis_summary(stats, filter_desc, df):
         total_val = 0
         if stats['numeric_stats'] is not None:
             for _, row in stats['numeric_stats'].iterrows():
-                if row['字段'] == value_col:
+                if row['字段'] == value:
                     total_val = row['总和']
                     break
         
-        if agg_func == "mean" or total_val == 0:
-            avg_val = stats['group_stats'].iloc[0][value_col]
-            summary += f"• 平均{value_col}：{avg_val:.1f}{unit}\n"
+        if agg == "mean" or total_val == 0:
+            avg_val = stats['group_stats'].iloc[0][value]
+            summary += f"• 平均{value}：{avg_val:.1f}{unit}\n"
         else:
             avg_val = total_val / stats['total_rows'] if stats['total_rows'] > 0 else 0
-            summary += f"• {value_col}总额：{total_val:,.0f}{unit}（人均 {avg_val:.0f}{unit}）\n"
-        
-        # 找年龄字段
-        age_col = None
-        for col in stats['numeric_cols']:
-            if '年龄' in col or 'age' in col.lower():
-                age_col = col
-                break
-        
-        if age_col and age_col != value_col:
-            age_data = stats['numeric_stats'][stats['numeric_stats']['字段'] == age_col]
-            if len(age_data) > 0:
-                avg_age = age_data['平均值'].values[0]
-                summary += f"• 平均年龄：{avg_age:.1f} 岁\n"
-        
-        # 找活跃字段
-        active_col = None
-        for col in stats['numeric_cols']:
-            if '活跃' in col or '天数' in col:
-                active_col = col
-                break
-        
-        if active_col:
-            active_data = stats['numeric_stats'][stats['numeric_stats']['字段'] == active_col]
-            if len(active_data) > 0:
-                avg_active = active_data['平均值'].values[0]
-                summary += f"• 平均{active_col}：{avg_active:.1f} 天\n"
+            summary += f"• {value}总额：{total_val:,.0f}{unit}（人均 {avg_val:.0f}{unit}）\n"
     
     else:
         # 无筛选条件时，显示全面分析
         summary += f"📊 整体数据\n"
         summary += f"• 总记录数：{stats['total_rows']} 条\n"
         
-        # 找薪资字段
-        salary_col = None
-        for col in stats['numeric_cols']:
-            if '薪资' in col or '工资' in col or 'salary' in col.lower():
-                salary_col = col
-                break
+        # 统计所有数值字段的平均值
+        if stats['numeric_stats'] is not None and len(stats['numeric_stats']) > 0:
+            for _, row in stats['numeric_stats'].head(3).iterrows():
+                unit = get_unit(row['字段'])
+                summary += f"• 平均{row['字段']}：{row['平均值']:.1f}{unit}\n"
         
-        if salary_col:
-            salary_data = stats['numeric_stats'][stats['numeric_stats']['字段'] == salary_col]
-            if len(salary_data) > 0:
-                avg_salary = salary_data['平均值'].values[0]
-                max_salary = salary_data['最大值'].values[0]
-                min_salary = salary_data['最小值'].values[0]
-                summary += f"• 平均薪资：{avg_salary:.0f}元\n"
-                summary += f"• 最高薪资：{max_salary:.0f}元\n"
-                summary += f"• 最低薪资：{min_salary:.0f}元\n"
+        # 自动选择最有意义的排名（第一个文本列 + 第一个数值列）
+        text_cols = df.select_dtypes(include=['object']).columns.tolist()
+        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
         
-        # 找年龄字段
-        age_col = None
-        for col in stats['numeric_cols']:
-            if '年龄' in col or 'age' in col.lower():
-                age_col = col
-                break
-        
-        if age_col:
-            age_data = stats['numeric_stats'][stats['numeric_stats']['字段'] == age_col]
-            if len(age_data) > 0:
-                avg_age = age_data['平均值'].values[0]
-                summary += f"• 平均年龄：{avg_age:.1f} 岁\n"
-        
-        # 找活跃字段
-        active_col = None
-        for col in stats['numeric_cols']:
-            if '活跃' in col or '天数' in col:
-                active_col = col
-                break
-        
-        if active_col:
-            active_data = stats['numeric_stats'][stats['numeric_stats']['字段'] == active_col]
-            if len(active_data) > 0:
-                avg_active = active_data['平均值'].values[0]
-                summary += f"• 平均{active_col}：{avg_active:.1f} 天\n"
-        
-        # 薪资排名（使用员工ID+姓名确保唯一性，避免姓名幻觉）
-        if salary_col and '姓名' in df.columns and '员工ID' in df.columns:
-            summary += f"\n📈 薪资排名（前10）\n"
-            top10 = df.nlargest(10, salary_col)[['员工ID', '姓名', salary_col]]
-            for _, row in top10.iterrows():
-                summary += f"• {row['姓名']}：{row[salary_col]:,.0f}元\n"
+        if text_cols and numeric_cols:
+            # 排除 ID 类字段
+            id_keywords = ['id', '编号', '工号', '序号']
+            real_numeric_cols = [c for c in numeric_cols if not any(kw in c.lower() for kw in id_keywords)]
+            
+            if real_numeric_cols:
+                rank_col = real_numeric_cols[0]
+                label_col = text_cols[0]
+                
+                summary += f"\n📈 {label_col}排名（前10）\n"
+                top10 = df.nlargest(10, rank_col)[[label_col, rank_col]].drop_duplicates(subset=[label_col])
+                for _, row in top10.iterrows():
+                    unit = get_unit(rank_col)
+                    summary += f"• {row[label_col]}：{row[rank_col]:,.0f}{unit}\n"
     
     return summary
 
 def generate_ai_insight(query, df, stats, analysis_summary, filter_desc):
-    """生成 AI 智能洞察（基于筛选后的数据）"""
+    """生成 AI 智能洞察（通用版）"""
     data_summary = f"用户问题：{query}\n\n"
     
     if filter_desc:
@@ -430,7 +407,7 @@ def generate_ai_insight(query, df, stats, analysis_summary, filter_desc):
     
     data_summary += f"【分析结果】\n{analysis_summary}\n\n"
     
-    # 添加筛选后的数据摘要
+    # 添加数据摘要
     data_summary += f"【数据概况】共 {stats['total_rows']} 条记录\n"
     
     if stats['group_stats'] is not None and len(stats['group_stats']) > 0:
@@ -451,7 +428,24 @@ def generate_ai_insight(query, df, stats, analysis_summary, filter_desc):
             unit = get_unit(row['字段'])
             data_summary += f"- {row['字段']}: 平均{row['平均值']:.1f}{unit}, 总和{row['总和']:.0f}{unit}\n"
     
-    prompt = f"""基于以下准确数据，给出洞察和建议：
+    # 添加排名数据（通用）
+    text_cols = df.select_dtypes(include=['object']).columns.tolist()
+    numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+    
+    if text_cols and numeric_cols:
+        id_keywords = ['id', '编号', '工号', '序号']
+        real_numeric_cols = [c for c in numeric_cols if not any(kw in c.lower() for kw in id_keywords)]
+        
+        if real_numeric_cols:
+            rank_col = real_numeric_cols[0]
+            label_col = text_cols[0]
+            data_summary += f"\n【{label_col}排名前10（真实数据）】\n"
+            top10 = df.nlargest(10, rank_col)[[label_col, rank_col]].drop_duplicates(subset=[label_col])
+            for _, row in top10.iterrows():
+                unit = get_unit(rank_col)
+                data_summary += f"- {row[label_col]}: {row[rank_col]:,.0f}{unit}\n"
+    
+    prompt = f"""基于以下准确数据，给出洞察和建议。注意：请只基于提供的数据进行分析，不要编造任何不存在的人名或数据。
 
 {data_summary}
 
@@ -632,7 +626,7 @@ if uploaded_file:
     # ==================== 输入区域 ====================
     st.markdown("---")
     
-    query = st.text_input("", placeholder="例如：「部门」「人事行政部」「抖音新用户」「给我建议」", label_visibility="collapsed")
+    query = st.text_input("", placeholder="例如：「部门」「绩效等级」「技术部」「给我建议」", label_visibility="collapsed")
     analyze_btn = st.button("🚀 开始分析", type="primary")
     
     # 动态生成示例提示
@@ -651,38 +645,48 @@ if uploaded_file:
             display_df = df
             filter_desc = None
         
-        # 检测分析指标
-        value_col, agg_func = detect_metric_from_query(query, display_df)
+        # 检测分析指标（返回数值字段或文本字段）
+        value_col, agg_func, text_col = detect_metric_from_query(query, display_df)
         
-        # 计算统计（基于筛选后的数据）
-        stats = precompute_stats(display_df, value_col, agg_func)
-        
-        # 生成分析结果总结（传入 df 用于排名）
-        analysis_summary = generate_analysis_summary(stats, filter_desc, display_df)
+        # 计算统计
+        if text_col:
+            # 用户问的是文本字段分布
+            stats = None
+            analysis_summary, group_stats = generate_text_distribution(display_df, text_col, filter_desc)
+        else:
+            # 用户问的是数值字段
+            stats = precompute_stats(display_df, value_col, agg_func)
+            analysis_summary = generate_analysis_summary(stats, filter_desc, display_df, query, text_col, value_col, agg_func)
+            group_stats = stats['group_stats'] if stats else None
         
         # 保存到 session_state
         st.session_state.has_result = True
         st.session_state.filtered_df = display_df
         st.session_state.filter_desc = filter_desc
-        st.session_state.group_stats = stats['group_stats']
-        st.session_state.numeric_stats = stats['numeric_stats']
-        st.session_state.total_rows = stats['total_rows']
-        st.session_state.total_columns = stats['total_columns']
+        st.session_state.group_stats = group_stats
+        st.session_state.numeric_stats = stats['numeric_stats'] if stats else None
+        st.session_state.total_rows = stats['total_rows'] if stats else len(display_df)
+        st.session_state.total_columns = stats['total_columns'] if stats else len(display_df.columns)
         st.session_state.analysis_summary = analysis_summary
-        st.session_state.group_col = stats['group_col']
-        st.session_state.value_col = stats['value_col']
-        st.session_state.agg_func = stats['agg_func']
+        st.session_state.group_col = stats['group_col'] if stats else None
+        st.session_state.value_col = stats['value_col'] if stats else None
+        st.session_state.agg_func = stats['agg_func'] if stats else None
         
         # ==================== 显示分析结果 ====================
         st.markdown("---")
         st.markdown("### 📊 分析结果")
         st.markdown(analysis_summary)
         
-        # ==================== AI 智能洞察（基于筛选后的数据）====================
+        # ==================== AI 智能洞察 ====================
         api_ok = check_api_availability()
         if api_ok:
             with st.spinner(random.choice(LOADING_MESSAGES)):
-                ai_response = generate_ai_insight(query, display_df, stats, analysis_summary, filter_desc)
+                if text_col:
+                    # 文本字段分布，生成简单的 AI 洞察
+                    ai_response = f"【洞察】\n{text_col}分布显示，各类型的分布情况如上表所示。\n\n【建议】\n可根据分布情况，关注占比最高的类型，分析其特点和优势。\n\n【趣味发现】\n{text_col}分布中，{display_df[text_col].value_counts().index[0]}占比最高。"
+                else:
+                    ai_response = generate_ai_insight(query, display_df, stats, analysis_summary, filter_desc)
+                
                 if ai_response:
                     st.session_state.ai_response = ai_response
                     st.markdown("### 🧠 Tuotuo's AI 智能洞察")
@@ -706,7 +710,7 @@ if uploaded_file:
             st.warning("🤖 AI 服务暂不可用，请检查 API Key")
         
         # ==================== 数据明细 & 图表 ====================
-        if stats['group_stats'] is not None and len(stats['group_stats']) > 0:
+        if group_stats is not None and len(group_stats) > 0:
             st.markdown("---")
             st.markdown("### 📊 数据明细 & 图表")
             
@@ -714,13 +718,11 @@ if uploaded_file:
             
             with col_left:
                 st.markdown("**📋 数据明细**")
-                st.dataframe(stats['group_stats'], use_container_width=True)
+                st.dataframe(group_stats, use_container_width=True)
             
             with col_right:
                 st.markdown("**📈 图表**")
-                group_col = stats['group_col']
-                value_col = stats['value_col']
-                fig = px.bar(stats['group_stats'], x=group_col, y=value_col, title=f"{group_col}分布")
+                fig = px.bar(group_stats, x=group_stats.columns[0], y=group_stats.columns[1], title=f"{group_stats.columns[0]}分布")
                 fig.update_traces(marker_color=PRIMARY_BLUE)
                 fig.update_layout(
                     title_font_size=14,
