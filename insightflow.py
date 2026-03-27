@@ -2,6 +2,7 @@
 InsightFlow - 智能数据决策助手（最终版）
 作者：Tuotuo09
 功能：精确匹配 + 按词拆分 + 多条件 AND 筛选 + 动态提示 + 全面分析结果
+修复：姓名幻觉问题（排名时使用员工ID+姓名确保唯一性）
 """
 
 import streamlit as st
@@ -305,8 +306,8 @@ def get_unit(value_col):
     else:
         return ""
 
-def generate_analysis_summary(stats, filter_desc):
-    """生成分析结果文字总结（更全面）"""
+def generate_analysis_summary(stats, filter_desc, df):
+    """生成分析结果文字总结（修复姓名幻觉）"""
     if stats['group_stats'] is None or len(stats['group_stats']) == 0:
         return "数据中没有找到可分析的字段。"
     
@@ -368,20 +369,22 @@ def generate_analysis_summary(stats, filter_desc):
         summary += f"📊 整体数据\n"
         summary += f"• 总记录数：{stats['total_rows']} 条\n"
         
-        # 找付费金额字段
-        pay_col = None
+        # 找薪资字段
+        salary_col = None
         for col in stats['numeric_cols']:
-            if '付费' in col or '金额' in col:
-                pay_col = col
+            if '薪资' in col or '工资' in col or 'salary' in col.lower():
+                salary_col = col
                 break
         
-        if pay_col:
-            pay_data = stats['numeric_stats'][stats['numeric_stats']['字段'] == pay_col]
-            if len(pay_data) > 0:
-                total_pay = pay_data['总和'].values[0]
-                avg_pay = pay_data['平均值'].values[0]
-                summary += f"• 总付费金额：{total_pay:,.0f}元\n"
-                summary += f"• 人均付费：{avg_pay:.1f}元\n"
+        if salary_col:
+            salary_data = stats['numeric_stats'][stats['numeric_stats']['字段'] == salary_col]
+            if len(salary_data) > 0:
+                avg_salary = salary_data['平均值'].values[0]
+                max_salary = salary_data['最大值'].values[0]
+                min_salary = salary_data['最小值'].values[0]
+                summary += f"• 平均薪资：{avg_salary:.0f}元\n"
+                summary += f"• 最高薪资：{max_salary:.0f}元\n"
+                summary += f"• 最低薪资：{min_salary:.0f}元\n"
         
         # 找年龄字段
         age_col = None
@@ -409,14 +412,12 @@ def generate_analysis_summary(stats, filter_desc):
                 avg_active = active_data['平均值'].values[0]
                 summary += f"• 平均{active_col}：{avg_active:.1f} 天\n"
         
-        # 渠道排名
-        if stats['group_stats'] is not None and len(stats['group_stats']) > 0:
-            summary += f"\n📈 {group_col}排名\n"
-            for _, row in stats['group_stats'].iterrows():
-                if agg_func == "mean":
-                    summary += f"• {row[group_col]}：{row[value_col]:.1f}{unit}\n"
-                else:
-                    summary += f"• {row[group_col]}：{row[value_col]:,.0f}{unit}\n"
+        # 薪资排名（使用员工ID+姓名确保唯一性，避免姓名幻觉）
+        if salary_col and '姓名' in df.columns and '员工ID' in df.columns:
+            summary += f"\n📈 薪资排名（前10）\n"
+            top10 = df.nlargest(10, salary_col)[['员工ID', '姓名', salary_col]]
+            for _, row in top10.iterrows():
+                summary += f"• {row['姓名']}：{row[salary_col]:,.0f}元\n"
     
     return summary
 
@@ -560,7 +561,7 @@ st.markdown(f"""
         margin-bottom: 16px;
     }}
     
-    /* 自定义上传按钮样式 */
+    /* 隐藏默认的上传提示文字 */
     [data-testid="stFileUploader"] > div:first-child {{
         background: linear-gradient(135deg, {PRIMARY_BLUE}, {DARK_BLUE});
         border-radius: 50px;
@@ -590,6 +591,10 @@ st.markdown(f"""
         content: "🚀 点击上传 Excel 或 CSV";
         font-size: 18px;
         font-weight: 600;
+    }}
+    /* 隐藏默认的上传提示文字 */
+    [data-testid="stFileUploader"] > div:first-child > div:first-child {{
+        display: none;
     }}
 </style>
 """, unsafe_allow_html=True)
@@ -652,8 +657,8 @@ if uploaded_file:
         # 计算统计（基于筛选后的数据）
         stats = precompute_stats(display_df, value_col, agg_func)
         
-        # 生成分析结果总结
-        analysis_summary = generate_analysis_summary(stats, filter_desc)
+        # 生成分析结果总结（传入 df 用于排名）
+        analysis_summary = generate_analysis_summary(stats, filter_desc, display_df)
         
         # 保存到 session_state
         st.session_state.has_result = True
