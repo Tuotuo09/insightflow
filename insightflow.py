@@ -437,8 +437,8 @@ def generate_analysis_summary(stats, filter_desc, df, query, text_col=None, valu
     
     return summary
 
-def generate_ai_insight(query, df, stats, analysis_summary, filter_desc):
-    """生成 AI 智能洞察（使用准确统计数据）"""
+def generate_ai_insight(query, df, stats, analysis_summary, filter_desc, privacy_mode=True):
+    """生成 AI 智能洞察（隐私模式下不发送个人数据）"""
     data_summary = f"用户问题：{query}\n\n"
     
     if filter_desc:
@@ -446,7 +446,7 @@ def generate_ai_insight(query, df, stats, analysis_summary, filter_desc):
     
     data_summary += f"【分析结果】\n{analysis_summary}\n\n"
     
-    # 添加准确的统计数据（让 AI 直接使用）
+    # 添加准确的统计数据（只发送汇总统计，不发送个人排名）
     data_summary += f"【准确统计数据（请直接使用以下数据，不要重新计算）】\n"
     
     if stats['numeric_stats'] is not None and len(stats['numeric_stats']) > 0:
@@ -454,9 +454,11 @@ def generate_ai_insight(query, df, stats, analysis_summary, filter_desc):
             unit = get_unit(row['字段'])
             data_summary += f"- 平均{row['字段']}：{row['平均值']:.1f}{unit}\n"
             data_summary += f"- 总{row['字段']}：{row['总和']:.0f}{unit}\n"
+            data_summary += f"- 最高{row['字段']}：{row['最大值']:.0f}{unit}\n"
+            data_summary += f"- 最低{row['字段']}：{row['最小值']:.0f}{unit}\n"
     
-    # 添加分组统计
-    if stats['group_stats'] is not None and len(stats['group_stats']) > 0:
+    # 隐私模式下：不发送分组统计中的个人数据
+    if not privacy_mode and stats['group_stats'] is not None and len(stats['group_stats']) > 0:
         group_col = stats['group_col']
         value_col = stats['value_col']
         agg_func = stats['agg_func']
@@ -468,7 +470,15 @@ def generate_ai_insight(query, df, stats, analysis_summary, filter_desc):
             else:
                 data_summary += f"- {row[group_col]}: {row[value_col]:,.0f}{unit}\n"
     
-    prompt = f"""基于以下准确数据，给出洞察和建议。注意：请直接使用【准确统计数据】中提供的数值，不要重新计算。
+    # 构建提示词
+    if privacy_mode:
+        privacy_instruction = "⚠️ 重要：当前为隐私模式，数据中不包含个人姓名。请只基于部门、岗位等分类数据进行洞察，绝对不要编造或提及任何具体个人姓名。"
+    else:
+        privacy_instruction = ""
+    
+    prompt = f"""基于以下准确数据，给出洞察和建议。请直接使用【准确统计数据】中提供的数值，不要重新计算。
+
+{privacy_instruction}
 
 {data_summary}
 
@@ -639,14 +649,14 @@ with col2:
     privacy_mode = st.checkbox(
         "🔒 隐私模式（开启后自动隐藏姓名、ID等个人标识字段）",
         value=st.session_state.privacy_mode,
-        help="开启后，分析结果中不会显示姓名、ID等个人敏感信息，只显示部门、岗位等分类统计"
+        help="开启后，分析结果中不会显示姓名、ID等个人敏感信息，AI 也不会提及任何个人"
     )
     st.session_state.privacy_mode = privacy_mode
     
     if privacy_mode:
-        st.info("🔒 隐私模式已开启，个人姓名、ID等字段将不会出现在排名中")
+        st.info("🔒 隐私模式已开启，个人姓名、ID等字段将不会出现在分析和 AI 洞察中")
     else:
-        st.info("🔓 隐私模式已关闭，将显示完整数据排名")
+        st.info("🔓 隐私模式已关闭，将显示完整数据排名，AI 可能提及个人")
 
 # ==================== 上传区域 ====================
 col1, col2, col3 = st.columns([1, 2, 1])
@@ -732,7 +742,7 @@ if uploaded_file:
                     top_count = display_df[text_col].value_counts().values[0]
                     ai_response = f"【洞察】\n{text_col}分布显示，{top_value}占比最高，共{top_count}人。\n\n【建议】\n可根据分布情况，关注占比最高的类型，分析其特点和优势。\n\n【趣味发现】\n{text_col}分布中，{top_value}是最常见的类型。"
                 else:
-                    ai_response = generate_ai_insight(query, display_df, stats, analysis_summary, filter_desc)
+                    ai_response = generate_ai_insight(query, display_df, stats, analysis_summary, filter_desc, privacy_mode)
                 
                 if ai_response:
                     st.session_state.ai_response = ai_response
