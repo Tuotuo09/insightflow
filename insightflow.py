@@ -1,8 +1,7 @@
 """
 InsightFlow - 智能数据决策助手（最终版）
 作者：Tuotuo09
-功能：通用数据分析 + 多条件筛选 + 动态提示 + AI 洞察
-修复：渠道排名显示错误、平均面试数错误
+功能：通用数据分析 + 多条件筛选 + 动态提示 + AI 洞察 + 隐私模式
 """
 
 import streamlit as st
@@ -67,6 +66,8 @@ if 'value_col' not in st.session_state:
     st.session_state.value_col = None
 if 'agg_func' not in st.session_state:
     st.session_state.agg_func = "sum"
+if 'privacy_mode' not in st.session_state:
+    st.session_state.privacy_mode = True
 
 # ==================== DeepSeek API 配置 ====================
 DEEPSEEK_API_KEY = "sk-52bcbd3d232945828250c3a1408598ff"
@@ -137,6 +138,15 @@ def clean_dataframe(df):
         else:
             df[col] = df[col].fillna('')
     return df
+
+def is_sensitive_field(col_name):
+    """判断是否为敏感字段（个人标识字段）"""
+    sensitive_keywords = ['姓名', '名字', '名称', '员工', '用户', '客户', '手机', '电话', '邮箱', '地址', 'id', '编号', '工号', '账号']
+    col_lower = col_name.lower()
+    for kw in sensitive_keywords:
+        if kw in col_lower:
+            return True
+    return False
 
 def detect_filters_from_query(query, df):
     """从用户问题中提取筛选条件（按词拆分，精确匹配，多条件AND）"""
@@ -330,8 +340,8 @@ def generate_text_distribution(df, text_col, filter_desc):
     
     return summary, value_counts
 
-def generate_analysis_summary(stats, filter_desc, df, query, text_col=None, value_col=None, agg_func=None):
-    """生成分析结果文字总结（通用版）"""
+def generate_analysis_summary(stats, filter_desc, df, query, text_col=None, value_col=None, agg_func=None, privacy_mode=True):
+    """生成分析结果文字总结（通用版，支持隐私模式）"""
     
     # 如果用户问的是文本字段分布
     if text_col and text_col in df.columns:
@@ -391,16 +401,39 @@ def generate_analysis_summary(stats, filter_desc, df, query, text_col=None, valu
             
             if real_numeric_cols:
                 rank_col = real_numeric_cols[0]
-                label_col = text_cols[0]
                 unit = get_unit(rank_col)
                 
-                # 计算各分组的平均值（更合理）
-                grouped_mean = df.groupby(label_col)[rank_col].mean().sort_values(ascending=False).reset_index()
-                grouped_mean.columns = [label_col, rank_col]
-                
-                summary += f"\n📈 {label_col}排名（按平均{rank_col}）\n"
-                for _, row in grouped_mean.head(10).iterrows():
-                    summary += f"• {row[label_col]}：{row[rank_col]:.1f}{unit}\n"
+                # 隐私模式：跳过敏感字段，找第一个非敏感字段
+                if privacy_mode:
+                    # 找到第一个非敏感的文本列作为排名列
+                    safe_label_col = None
+                    for col in text_cols:
+                        if not is_sensitive_field(col):
+                            safe_label_col = col
+                            break
+                    
+                    if safe_label_col:
+                        grouped_mean = df.groupby(safe_label_col)[rank_col].mean().sort_values(ascending=False).reset_index()
+                        grouped_mean.columns = [safe_label_col, rank_col]
+                        summary += f"\n📈 {safe_label_col}排名（按平均{rank_col}）\n"
+                        for _, row in grouped_mean.head(10).iterrows():
+                            summary += f"• {row[safe_label_col]}：{row[rank_col]:.1f}{unit}\n"
+                    else:
+                        # 没有非敏感字段，使用第一个文本列但提示
+                        label_col = text_cols[0]
+                        grouped_mean = df.groupby(label_col)[rank_col].mean().sort_values(ascending=False).reset_index()
+                        grouped_mean.columns = [label_col, rank_col]
+                        summary += f"\n📈 {label_col}排名（按平均{rank_col}）\n"
+                        for _, row in grouped_mean.head(10).iterrows():
+                            summary += f"• {row[label_col]}：{row[rank_col]:.1f}{unit}\n"
+                else:
+                    # 正常模式，使用第一个文本列
+                    label_col = text_cols[0]
+                    grouped_mean = df.groupby(label_col)[rank_col].mean().sort_values(ascending=False).reset_index()
+                    grouped_mean.columns = [label_col, rank_col]
+                    summary += f"\n📈 {label_col}排名（按平均{rank_col}）\n"
+                    for _, row in grouped_mean.head(10).iterrows():
+                        summary += f"• {row[label_col]}：{row[rank_col]:.1f}{unit}\n"
     
     return summary
 
@@ -543,6 +576,15 @@ st.markdown(f"""
         margin-bottom: 16px;
     }}
     
+    /* 隐私模式开关样式 */
+    .privacy-switch {{
+        background-color: white;
+        border-radius: 16px;
+        padding: 12px 20px;
+        margin-bottom: 20px;
+        border: 1px solid #E5E7EB;
+    }}
+    
     /* 隐藏默认的上传提示文字 */
     [data-testid="stFileUploader"] > div:first-child {{
         background: linear-gradient(135deg, {PRIMARY_BLUE}, {DARK_BLUE});
@@ -590,6 +632,21 @@ st.markdown("""
     </p>
 </div>
 """, unsafe_allow_html=True)
+
+# ==================== 隐私模式开关 ====================
+col1, col2, col3 = st.columns([1, 2, 1])
+with col2:
+    privacy_mode = st.checkbox(
+        "🔒 隐私模式（开启后自动隐藏姓名、ID等个人标识字段）",
+        value=st.session_state.privacy_mode,
+        help="开启后，分析结果中不会显示姓名、ID等个人敏感信息，只显示部门、岗位等分类统计"
+    )
+    st.session_state.privacy_mode = privacy_mode
+    
+    if privacy_mode:
+        st.info("🔒 隐私模式已开启，个人姓名、ID等字段将不会出现在排名中")
+    else:
+        st.info("🔓 隐私模式已关闭，将显示完整数据排名")
 
 # ==================== 上传区域 ====================
 col1, col2, col3 = st.columns([1, 2, 1])
@@ -644,7 +701,7 @@ if uploaded_file:
         else:
             # 用户问的是数值字段
             stats = precompute_stats(display_df, value_col, agg_func)
-            analysis_summary = generate_analysis_summary(stats, filter_desc, display_df, query, text_col, value_col, agg_func)
+            analysis_summary = generate_analysis_summary(stats, filter_desc, display_df, query, text_col, value_col, agg_func, privacy_mode)
             group_stats = stats['group_stats'] if stats else None
         
         # 保存到 session_state
