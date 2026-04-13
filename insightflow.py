@@ -2,7 +2,7 @@
 InsightFlow - 智能数据决策助手（最终版）
 作者：Tuotuo09
 功能：通用数据分析 + 多条件筛选 + 动态提示 + AI 洞察 + 隐私模式
-特性：分析结果动态展示所有数值字段，智能排名（隐私模式自动切换）
+特性：分析结果横向展示，简洁清晰
 """
 
 import streamlit as st
@@ -380,8 +380,12 @@ def extract_target_field_from_query(query):
             return kw
     return None
 
+def format_number(num):
+    """格式化数字，添加千分位分隔符"""
+    return f"{num:,.0f}"
+
 def generate_analysis_summary(stats, filter_desc, df, query, text_col=None, value_col=None, agg_func=None, privacy_mode=True):
-    """生成分析结果文字总结（动态全面版）"""
+    """生成分析结果文字总结（横向展示版）"""
     
     # 如果用户问的是文本字段分布
     if text_col and text_col in df.columns:
@@ -400,7 +404,7 @@ def generate_analysis_summary(stats, filter_desc, df, query, text_col=None, valu
         summary += f"📊 整体数据\n"
         summary += f"• 总记录数：{stats['total_rows']} 条\n"
     
-    # 遍历所有数值字段，动态展示统计
+    # 遍历所有数值字段，横向展示统计
     if stats['numeric_stats'] is not None and len(stats['numeric_stats']) > 0:
         for _, row in stats['numeric_stats'].iterrows():
             field_name = row['字段']
@@ -412,14 +416,18 @@ def generate_analysis_summary(stats, filter_desc, df, query, text_col=None, valu
                 if target_field not in field_name and field_name not in target_field:
                     continue
             
-            summary += f"\n📈 {field_name}\n"
-            summary += f"• 平均值：{row['平均值']:.1f}{unit}\n"
-            summary += f"• 最高值：{row['最大值']:.0f}{unit}\n"
-            summary += f"• 最低值：{row['最小值']:.0f}{unit}\n"
+            # 横向展示各项指标
+            items = []
+            items.append(f"平均值：{row['平均值']:.1f}{unit}")
+            items.append(f"最高值：{format_number(row['最大值'])}{unit}")
+            items.append(f"最低值：{format_number(row['最小值'])}{unit}")
             if show_sum:
-                summary += f"• 总和：{row['总和']:.0f}{unit}\n"
+                items.append(f"总和：{format_number(row['总和'])}{unit}")
+            
+            summary += f"\n📈 {field_name}\n"
+            summary += " | ".join(items) + "\n"
     
-    # 添加排名（前5 + 后5）
+    # 添加排名（只显示前5名，横向展示）
     rank_label_col = get_rank_label_col(df, privacy_mode)
     numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
     id_keywords = ['id', '编号', '工号', '序号', '用户id', '员工id']
@@ -433,14 +441,9 @@ def generate_analysis_summary(stats, filter_desc, df, query, text_col=None, valu
         grouped_mean = df.groupby(rank_label_col)[rank_col].mean().sort_values(ascending=False)
         
         if len(grouped_mean) > 0:
+            rank_items = [f"{label}：{format_number(value)}{unit}" for label, value in grouped_mean.head(5).items()]
             summary += f"\n🏆 {rank_label_col}排名（前5）\n"
-            for i, (label, value) in enumerate(grouped_mean.head(5).items()):
-                summary += f"{i+1}. {label}：{value:.1f}{unit}\n"
-            
-            if len(grouped_mean) > 5:
-                summary += f"\n📉 {rank_label_col}排名（后5）\n"
-                for i, (label, value) in enumerate(grouped_mean.tail(5).iloc[::-1].items()):
-                    summary += f"{len(grouped_mean)-4+i}. {label}：{value:.1f}{unit}\n"
+            summary += " | ".join(rank_items) + "\n"
     
     return summary
 
