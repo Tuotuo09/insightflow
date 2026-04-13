@@ -2,7 +2,7 @@
 InsightFlow - 智能数据决策助手（最终版）
 作者：Tuotuo09
 功能：通用数据分析 + 多条件筛选 + 动态提示 + AI 洞察 + 隐私模式
-修复：对比类问题识别、隐私模式下所有模块隐藏个人敏感字段
+特性：分析结果自动识别用户指定字段，动态展示所有数值字段的关键统计
 """
 
 import streamlit as st
@@ -215,7 +215,6 @@ def detect_metric_from_query(query, df):
     # 0. 检查是否是对比类问题（如「各部门薪酬对比」）
     if '对比' in query_lower or '比较' in query_lower:
         if text_cols and real_numeric_cols:
-            # 返回第一个文本列（分组）和第一个数值列（对比值）
             return real_numeric_cols[0], 'sum', None
     
     # 1. 检查用户是否在问文本字段分布
@@ -347,100 +346,50 @@ def generate_text_distribution(df, text_col, filter_desc):
     
     return summary, value_counts
 
+def extract_target_field_from_query(query):
+    """从用户问题中提取目标字段关键词"""
+    field_keywords = ['薪酬', '薪资', '工资', '年龄', '出勤', '迟到', '加班', '活跃', '登录', '付费', '销售额', '简历', '面试', '录用', '入职']
+    for kw in field_keywords:
+        if kw in query:
+            return kw
+    return None
+
 def generate_analysis_summary(stats, filter_desc, df, query, text_col=None, value_col=None, agg_func=None, privacy_mode=True):
-    """生成分析结果文字总结（通用版，支持隐私模式）"""
+    """生成分析结果文字总结（动态全面版）"""
     
     # 如果用户问的是文本字段分布
     if text_col and text_col in df.columns:
         summary, _ = generate_text_distribution(df, text_col, filter_desc)
         return summary
     
-    # 否则处理数值字段
-    if stats['group_stats'] is None or len(stats['group_stats']) == 0:
-        return "数据中没有找到可分析的字段。"
-    
-    group_col = stats['group_col']
-    value = stats['value_col'] if value_col is None else value_col
-    agg = stats['agg_func'] if agg_func is None else agg_func
-    unit = get_unit(value)
+    # 提取用户指定的目标字段
+    target_field = extract_target_field_from_query(query)
     
     summary = ""
     
     if filter_desc:
-        # 有筛选条件时，显示详细数据
         summary += f"📊 整体数据\n"
         summary += f"• {filter_desc} 共有 {stats['total_rows']} 条记录\n"
-        
-        # 获取总额
-        total_val = 0
-        if stats['numeric_stats'] is not None:
-            for _, row in stats['numeric_stats'].iterrows():
-                if row['字段'] == value:
-                    total_val = row['总和']
-                    break
-        
-        if agg == "mean" or total_val == 0:
-            avg_val = stats['group_stats'].iloc[0][value]
-            summary += f"• 平均{value}：{avg_val:.1f}{unit}\n"
-        else:
-            avg_val = total_val / stats['total_rows'] if stats['total_rows'] > 0 else 0
-            summary += f"• {value}总额：{total_val:,.0f}{unit}（人均 {avg_val:.0f}{unit}）\n"
-    
     else:
-        # 无筛选条件时，显示全面分析
         summary += f"📊 整体数据\n"
         summary += f"• 总记录数：{stats['total_rows']} 条\n"
-        
-        # 统计所有数值字段的平均值（全部显示）
-        if stats['numeric_stats'] is not None and len(stats['numeric_stats']) > 0:
-            for _, row in stats['numeric_stats'].iterrows():
-                unit = get_unit(row['字段'])
-                summary += f"• 平均{row['字段']}：{row['平均值']:.1f}{unit}\n"
-        
-        # 自动选择最有意义的排名（第一个文本列 + 第一个数值列）
-        text_cols = df.select_dtypes(include=['object']).columns.tolist()
-        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-        
-        if text_cols and numeric_cols:
-            # 排除 ID 类字段
-            id_keywords = ['id', '编号', '工号', '序号']
-            real_numeric_cols = [c for c in numeric_cols if not any(kw in c.lower() for kw in id_keywords)]
+    
+    # 遍历所有数值字段，动态展示统计
+    if stats['numeric_stats'] is not None and len(stats['numeric_stats']) > 0:
+        for _, row in stats['numeric_stats'].iterrows():
+            field_name = row['字段']
+            unit = get_unit(field_name)
             
-            if real_numeric_cols:
-                rank_col = real_numeric_cols[0]
-                unit = get_unit(rank_col)
-                
-                # 隐私模式：跳过敏感字段，找第一个非敏感字段
-                if privacy_mode:
-                    # 找到第一个非敏感的文本列作为排名列
-                    safe_label_col = None
-                    for col in text_cols:
-                        if not is_sensitive_field(col):
-                            safe_label_col = col
-                            break
-                    
-                    if safe_label_col:
-                        grouped_mean = df.groupby(safe_label_col)[rank_col].mean().sort_values(ascending=False).reset_index()
-                        grouped_mean.columns = [safe_label_col, rank_col]
-                        summary += f"\n📈 {safe_label_col}排名（按平均{rank_col}）\n"
-                        for _, row in grouped_mean.head(10).iterrows():
-                            summary += f"• {row[safe_label_col]}：{row[rank_col]:.1f}{unit}\n"
-                    else:
-                        # 没有非敏感字段，使用第一个文本列但提示
-                        label_col = text_cols[0]
-                        grouped_mean = df.groupby(label_col)[rank_col].mean().sort_values(ascending=False).reset_index()
-                        grouped_mean.columns = [label_col, rank_col]
-                        summary += f"\n📈 {label_col}排名（按平均{rank_col}）\n"
-                        for _, row in grouped_mean.head(10).iterrows():
-                            summary += f"• {row[label_col]}：{row[rank_col]:.1f}{unit}\n"
-                else:
-                    # 正常模式，使用第一个文本列
-                    label_col = text_cols[0]
-                    grouped_mean = df.groupby(label_col)[rank_col].mean().sort_values(ascending=False).reset_index()
-                    grouped_mean.columns = [label_col, rank_col]
-                    summary += f"\n📈 {label_col}排名（按平均{rank_col}）\n"
-                    for _, row in grouped_mean.head(10).iterrows():
-                        summary += f"• {row[label_col]}：{row[rank_col]:.1f}{unit}\n"
+            # 如果用户指定了目标字段，只显示匹配的字段
+            if target_field:
+                if target_field not in field_name and field_name not in target_field:
+                    continue
+            
+            summary += f"\n📈 {field_name}\n"
+            summary += f"• 平均值：{row['平均值']:.1f}{unit}\n"
+            summary += f"• 最大值：{row['最大值']:.0f}{unit}\n"
+            summary += f"• 最小值：{row['最小值']:.0f}{unit}\n"
+            summary += f"• 总和：{row['总和']:.0f}{unit}\n"
     
     return summary
 
