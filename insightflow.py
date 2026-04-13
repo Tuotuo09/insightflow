@@ -2,7 +2,7 @@
 InsightFlow - 智能数据决策助手（最终版）
 作者：Tuotuo09
 功能：通用数据分析 + 多条件筛选 + 动态提示 + AI 洞察 + 隐私模式
-特性：分析结果自动识别用户指定字段，动态展示所有数值字段的关键统计
+特性：分析结果动态展示所有数值字段，智能排名（隐私模式自动切换）
 """
 
 import streamlit as st
@@ -148,6 +148,32 @@ def is_sensitive_field(col_name):
         if kw in col_lower:
             return True
     return False
+
+def should_show_sum(field_name):
+    """判断字段是否应该显示总和（年龄、单价等不应该显示总和）"""
+    no_sum_keywords = ['年龄', 'age', '单价', '价格', 'price', '时长', '比例', '率']
+    field_lower = field_name.lower()
+    for kw in no_sum_keywords:
+        if kw in field_lower:
+            return False
+    return True
+
+def get_rank_label_col(df, privacy_mode):
+    """获取排名用的标签列（隐私模式用部门/岗位，普通模式用姓名）"""
+    text_cols = df.select_dtypes(include=['object']).columns.tolist()
+    
+    if privacy_mode:
+        # 隐私模式：找第一个非敏感的文本列（部门、岗位、品类等）
+        for col in text_cols:
+            if not is_sensitive_field(col):
+                return col
+        return text_cols[0] if text_cols else None
+    else:
+        # 普通模式：优先使用姓名列，否则用第一个文本列
+        for col in text_cols:
+            if '姓名' in col or '名字' in col:
+                return col
+        return text_cols[0] if text_cols else None
 
 def detect_filters_from_query(query, df):
     """从用户问题中提取筛选条件（按词拆分，精确匹配，多条件AND）"""
@@ -379,6 +405,7 @@ def generate_analysis_summary(stats, filter_desc, df, query, text_col=None, valu
         for _, row in stats['numeric_stats'].iterrows():
             field_name = row['字段']
             unit = get_unit(field_name)
+            show_sum = should_show_sum(field_name)
             
             # 如果用户指定了目标字段，只显示匹配的字段
             if target_field:
@@ -387,9 +414,33 @@ def generate_analysis_summary(stats, filter_desc, df, query, text_col=None, valu
             
             summary += f"\n📈 {field_name}\n"
             summary += f"• 平均值：{row['平均值']:.1f}{unit}\n"
-            summary += f"• 最大值：{row['最大值']:.0f}{unit}\n"
-            summary += f"• 最小值：{row['最小值']:.0f}{unit}\n"
-            summary += f"• 总和：{row['总和']:.0f}{unit}\n"
+            summary += f"• 最高值：{row['最大值']:.0f}{unit}\n"
+            summary += f"• 最低值：{row['最小值']:.0f}{unit}\n"
+            if show_sum:
+                summary += f"• 总和：{row['总和']:.0f}{unit}\n"
+    
+    # 添加排名（前5 + 后5）
+    rank_label_col = get_rank_label_col(df, privacy_mode)
+    numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+    id_keywords = ['id', '编号', '工号', '序号', '用户id', '员工id']
+    real_numeric_cols = [c for c in numeric_cols if not any(kw in c.lower() for kw in id_keywords)]
+    
+    if rank_label_col and real_numeric_cols:
+        rank_col = real_numeric_cols[0]
+        unit = get_unit(rank_col)
+        
+        # 计算各分组平均值用于排名
+        grouped_mean = df.groupby(rank_label_col)[rank_col].mean().sort_values(ascending=False)
+        
+        if len(grouped_mean) > 0:
+            summary += f"\n🏆 {rank_label_col}排名（前5）\n"
+            for i, (label, value) in enumerate(grouped_mean.head(5).items()):
+                summary += f"{i+1}. {label}：{value:.1f}{unit}\n"
+            
+            if len(grouped_mean) > 5:
+                summary += f"\n📉 {rank_label_col}排名（后5）\n"
+                for i, (label, value) in enumerate(grouped_mean.tail(5).iloc[::-1].items()):
+                    summary += f"{len(grouped_mean)-4+i}. {label}：{value:.1f}{unit}\n"
     
     return summary
 
@@ -540,15 +591,6 @@ st.markdown(f"""
         font-size: 12px;
         display: inline-block;
         margin-bottom: 16px;
-    }}
-    
-    /* 隐私模式开关样式 */
-    .privacy-switch {{
-        background-color: white;
-        border-radius: 16px;
-        padding: 12px 20px;
-        margin-bottom: 20px;
-        border: 1px solid #E5E7EB;
     }}
     
     /* 隐藏默认的上传提示文字 */
