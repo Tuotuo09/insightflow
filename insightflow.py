@@ -2,6 +2,7 @@
 InsightFlow - 智能数据决策助手（最终版）
 作者：Tuotuo09
 功能：通用数据分析 + 多条件筛选 + 动态提示 + AI 洞察 + 隐私模式
+修复：隐私模式下所有模块（数据明细&图表、全部数据明细）都隐藏个人敏感字段
 """
 
 import streamlit as st
@@ -649,14 +650,14 @@ with col2:
     privacy_mode = st.checkbox(
         "🔒 隐私模式（开启后自动隐藏姓名、ID等个人标识字段）",
         value=st.session_state.privacy_mode,
-        help="开启后，分析结果中不会显示姓名、ID等个人敏感信息，AI 也不会提及任何个人"
+        help="开启后，分析结果、数据明细、AI洞察中都不会显示个人敏感信息"
     )
     st.session_state.privacy_mode = privacy_mode
     
     if privacy_mode:
-        st.info("🔒 隐私模式已开启，个人姓名、ID等字段将不会出现在分析和 AI 洞察中")
+        st.info("🔒 隐私模式已开启，个人姓名、ID等字段将不会出现在任何地方")
     else:
-        st.info("🔓 隐私模式已关闭，将显示完整数据排名，AI 可能提及个人")
+        st.info("🔓 隐私模式已关闭，将显示完整数据")
 
 # ==================== 上传区域 ====================
 col1, col2, col3 = st.columns([1, 2, 1])
@@ -675,7 +676,13 @@ if uploaded_file:
     
     # 数据详情
     with st.expander("📋 查看数据详情"):
-        st.dataframe(df.head(100), use_container_width=True)
+        # 隐私模式下过滤敏感字段
+        if privacy_mode:
+            display_cols = [col for col in df.columns if not is_sensitive_field(col)]
+            display_df_preview = df[display_cols]
+        else:
+            display_df_preview = df
+        st.dataframe(display_df_preview.head(100), use_container_width=True)
         st.caption(f"共 {len(df)} 行，{len(df.columns)} 列")
     
     # ==================== 输入区域 ====================
@@ -771,39 +778,56 @@ if uploaded_file:
             st.markdown("---")
             st.markdown("### 📊 数据明细 & 图表")
             
+            # 隐私模式下过滤敏感字段
+            if privacy_mode:
+                display_columns = [col for col in group_stats.columns if not is_sensitive_field(col)]
+                display_group_stats = group_stats[display_columns]
+            else:
+                display_group_stats = group_stats
+            
             col_left, col_right = st.columns([3, 2])
             
             with col_left:
                 st.markdown("**📋 数据明细**")
-                st.dataframe(group_stats, use_container_width=True)
+                st.dataframe(display_group_stats, use_container_width=True)
             
             with col_right:
                 st.markdown("**📈 图表**")
-                fig = px.bar(group_stats, x=group_stats.columns[0], y=group_stats.columns[1], title=f"{group_stats.columns[0]}分布")
-                fig.update_traces(marker_color=PRIMARY_BLUE)
-                fig.update_layout(
-                    title_font_size=14,
-                    paper_bgcolor='rgba(0,0,0,0)',
-                    plot_bgcolor='rgba(0,0,0,0)'
-                )
-                st.plotly_chart(fig, use_container_width=True)
+                if len(display_group_stats.columns) >= 2:
+                    chart_col = display_group_stats.columns[0]
+                    value_col = display_group_stats.columns[1]
+                    fig = px.bar(display_group_stats, x=chart_col, y=value_col, title=f"{chart_col}分布")
+                    fig.update_traces(marker_color=PRIMARY_BLUE)
+                    fig.update_layout(
+                        title_font_size=14,
+                        paper_bgcolor='rgba(0,0,0,0)',
+                        plot_bgcolor='rgba(0,0,0,0)'
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
         
-        # 数据明细分页
+        # ==================== 全部数据明细 ====================
         if len(display_df) > 0:
             st.markdown("---")
             st.markdown(f"### 📋 全部数据明细（共 {len(display_df)} 条）")
             
+            # 隐私模式下过滤敏感字段
+            if privacy_mode:
+                display_cols = [col for col in display_df.columns if not is_sensitive_field(col)]
+                display_data = display_df[display_cols]
+            else:
+                display_data = display_df
+            
             rows_per_page = 10
-            total_pages = (len(display_df) + rows_per_page - 1) // rows_per_page
+            total_pages = (len(display_data) + rows_per_page - 1) // rows_per_page
             page_key = "data_page"
             if page_key not in st.session_state:
                 st.session_state[page_key] = 1
             
             current_page = st.session_state[page_key]
             start_idx = (current_page - 1) * rows_per_page
-            end_idx = min(start_idx + rows_per_page, len(display_df))
+            end_idx = min(start_idx + rows_per_page, len(display_data))
             
-            st.dataframe(display_df.iloc[start_idx:end_idx], use_container_width=True)
+            st.dataframe(display_data.iloc[start_idx:end_idx], use_container_width=True)
             
             if total_pages > 1:
                 col1, col2, col3, col4, col5 = st.columns([1, 1, 2, 1, 1])
@@ -859,38 +883,53 @@ if uploaded_file:
             st.markdown("---")
             st.markdown("### 📊 数据明细 & 图表")
             
+            # 隐私模式下过滤敏感字段
+            if privacy_mode:
+                display_columns = [col for col in st.session_state.group_stats.columns if not is_sensitive_field(col)]
+                display_group_stats = st.session_state.group_stats[display_columns]
+            else:
+                display_group_stats = st.session_state.group_stats
+            
             col_left, col_right = st.columns([3, 2])
             with col_left:
                 st.markdown("**📋 数据明细**")
-                st.dataframe(st.session_state.group_stats, use_container_width=True)
+                st.dataframe(display_group_stats, use_container_width=True)
             with col_right:
                 st.markdown("**📈 图表**")
-                group_col = st.session_state.group_stats.columns[0]
-                value_col = st.session_state.group_stats.columns[1]
-                fig = px.bar(st.session_state.group_stats, x=group_col, y=value_col, title=f"{group_col}分布")
-                fig.update_traces(marker_color=PRIMARY_BLUE)
-                fig.update_layout(
-                    title_font_size=14,
-                    paper_bgcolor='rgba(0,0,0,0)',
-                    plot_bgcolor='rgba(0,0,0,0)'
-                )
-                st.plotly_chart(fig, use_container_width=True)
+                if len(display_group_stats.columns) >= 2:
+                    group_col = display_group_stats.columns[0]
+                    value_col = display_group_stats.columns[1]
+                    fig = px.bar(display_group_stats, x=group_col, y=value_col, title=f"{group_col}分布")
+                    fig.update_traces(marker_color=PRIMARY_BLUE)
+                    fig.update_layout(
+                        title_font_size=14,
+                        paper_bgcolor='rgba(0,0,0,0)',
+                        plot_bgcolor='rgba(0,0,0,0)'
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
         
         if st.session_state.filtered_df is not None:
             st.markdown("---")
             st.markdown(f"### 📋 全部数据明细（共 {len(st.session_state.filtered_df)} 条）")
             
+            # 隐私模式下过滤敏感字段
+            if privacy_mode:
+                display_cols = [col for col in st.session_state.filtered_df.columns if not is_sensitive_field(col)]
+                display_data = st.session_state.filtered_df[display_cols]
+            else:
+                display_data = st.session_state.filtered_df
+            
             rows_per_page = 10
-            total_pages = (len(st.session_state.filtered_df) + rows_per_page - 1) // rows_per_page
+            total_pages = (len(display_data) + rows_per_page - 1) // rows_per_page
             page_key = "data_page"
             if page_key not in st.session_state:
                 st.session_state[page_key] = 1
             
             current_page = st.session_state[page_key]
             start_idx = (current_page - 1) * rows_per_page
-            end_idx = min(start_idx + rows_per_page, len(st.session_state.filtered_df))
+            end_idx = min(start_idx + rows_per_page, len(display_data))
             
-            st.dataframe(st.session_state.filtered_df.iloc[start_idx:end_idx], use_container_width=True)
+            st.dataframe(display_data.iloc[start_idx:end_idx], use_container_width=True)
             
             if total_pages > 1:
                 col1, col2, col3, col4, col5 = st.columns([1, 1, 2, 1, 1])
