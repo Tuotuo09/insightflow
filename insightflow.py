@@ -2,7 +2,7 @@
 InsightFlow - 智能数据决策助手（最终版）
 作者：Tuotuo09
 功能：通用数据分析 + 多条件筛选 + 动态提示 + AI 洞察 + 隐私模式
-修复：隐私模式下所有模块（数据明细&图表、全部数据明细）都隐藏个人敏感字段
+修复：对比类问题识别、隐私模式下所有模块隐藏个人敏感字段
 """
 
 import streamlit as st
@@ -212,6 +212,12 @@ def detect_metric_from_query(query, df):
     
     query_lower = query.lower()
     
+    # 0. 检查是否是对比类问题（如「各部门薪酬对比」）
+    if '对比' in query_lower or '比较' in query_lower:
+        if text_cols and real_numeric_cols:
+            # 返回第一个文本列（分组）和第一个数值列（对比值）
+            return real_numeric_cols[0], 'sum', None
+    
     # 1. 检查用户是否在问文本字段分布
     for col in text_cols:
         col_lower = col.lower()
@@ -220,7 +226,7 @@ def detect_metric_from_query(query, df):
     
     # 2. 关键词映射（数值字段）
     keyword_map = [
-        (['付费', '金额', '消费', '支付', 'payment', 'amount', '销售额', '销售', '收入', '薪资', '工资'], 'sum'),
+        (['薪酬', '薪资', '工资', '收入', '金额', '付费', '销售额', '销售'], 'sum'),
         (['年龄', 'age'], 'mean'),
         (['单价', '价格', 'price'], 'mean'),
         (['时长', '时间', 'duration', 'time'], 'mean'),
@@ -318,7 +324,7 @@ def get_unit(value_col):
         return "天"
     elif '次数' in col_lower or '次' in col_lower:
         return "次"
-    elif '付费' in col_lower or '金额' in col_lower or '薪资' in col_lower or '工资' in col_lower:
+    elif '薪酬' in col_lower or '薪资' in col_lower or '工资' in col_lower or '金额' in col_lower or '付费' in col_lower:
         return "元"
     elif '简历' in col_lower or '面试' in col_lower or '录用' in col_lower or '入职' in col_lower:
         return "人"
@@ -688,7 +694,7 @@ if uploaded_file:
     # ==================== 输入区域 ====================
     st.markdown("---")
     
-    query = st.text_input("", placeholder="例如：「部门」「绩效等级」「技术部」「给我建议」", label_visibility="collapsed")
+    query = st.text_input("", placeholder="例如：「部门」「绩效等级」「技术部」「各部门薪酬对比」「给我建议」", label_visibility="collapsed")
     analyze_btn = st.button("🚀 开始分析", type="primary")
     
     # 动态生成示例提示
